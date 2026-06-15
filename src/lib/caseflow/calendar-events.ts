@@ -2,6 +2,7 @@
 // - 보정 미완료 + 기한 있음
 // - 사건의 채권자집회 (creditor_meeting 텍스트에서 날짜 파싱)
 import { dbSelect } from "@/lib/db";
+import { getCaseScope } from "@/lib/caseflow/visibility";
 
 export interface CalendarEvent {
   id: string;
@@ -42,6 +43,9 @@ function parseMeetingDate(text: string): string | null {
 }
 
 export async function loadCalendarEvents(): Promise<CalendarEvent[]> {
+  // 가시성: staff는 본인 담당 사건만, 관리자는 전체
+  const scope = await getCaseScope();
+
   const [corrs, meetingCases] = await Promise.all([
     dbSelect<CorrectionJoined>(
       `SELECT cor.id, cor.case_id, cor.document_type,
@@ -50,12 +54,14 @@ export async function loadCalendarEvents(): Promise<CalendarEvent[]> {
        FROM case_corrections cor
        JOIN cases c ON c.id = cor.case_id
        WHERE cor.status IN ('pending', 'approaching', 'overdue')
-         AND cor.deadline_date IS NOT NULL`,
+         AND cor.deadline_date IS NOT NULL${scope ? " AND c.assigned_to = ?" : ""}`,
+      scope ? [scope] : [],
     ),
     dbSelect<CaseMeetingRecord>(
       `SELECT id, case_number, applicant_name, court_region, creditor_meeting
        FROM cases
-       WHERE creditor_meeting IS NOT NULL`,
+       WHERE creditor_meeting IS NOT NULL${scope ? " AND assigned_to = ?" : ""}`,
+      scope ? [scope] : [],
     ),
   ]);
 

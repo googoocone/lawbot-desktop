@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { getDb, dbSelect } from "@/lib/db";
-import { syncAll } from "@/lib/sync";
+import { syncAll, ensureLocalDataOwner } from "@/lib/sync";
 import { LoginScreen } from "@/components/auth/LoginScreen";
 import { MainShell, type ShellTab } from "@/components/layout/MainShell";
 import { CaseScheduleDashboard } from "@/components/cases/CaseScheduleDashboard";
@@ -80,11 +80,18 @@ function App() {
 
   useEffect(() => {
     if (auth.status === "signed_in") {
-      reloadRows();
-      if (!didInitialSync) {
-        setDidInitialSync(true);
-        handleSync();
-      }
+      (async () => {
+        // 다른 계정으로 로그인했으면 이전 계정의 로컬 미러를 비운다 (타 계정 사건 노출 방지)
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user && (await ensureLocalDataOwner(user.id))) {
+          console.log("[sync] 계정 변경 감지 — 로컬 데이터 초기화 후 풀 싱크");
+        }
+        reloadRows();
+        if (!didInitialSync) {
+          setDidInitialSync(true);
+          handleSync();
+        }
+      })();
 
       // Realtime 구독 — 다른 PC 변경이 즉시 반영
       const unsub = subscribeRealtime({
@@ -325,6 +332,7 @@ function App() {
           userName={auth.name}
           onRowClick={(id) => setView({ kind: "detail", id, from: "list" })}
           onPopupOpen={(row) => setPopupRow(row)}
+          onCasesDeleted={reloadRows}
         />
       )}
 

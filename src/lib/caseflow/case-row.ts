@@ -2,6 +2,7 @@
 // (flow/app/dashboard/case-schedule/page.tsx의 transform 로직과 동일)
 import { dbSelect } from "@/lib/db";
 import { addDays } from "@/lib/caseflow/utils/date";
+import { getCaseScope } from "@/lib/caseflow/visibility";
 
 export interface CaseRow {
   id: string;
@@ -81,13 +82,17 @@ interface ExtensionRecord {
 }
 
 export async function loadCaseRows(): Promise<CaseRow[]> {
+  // 가시성: staff는 본인 담당 사건만, 관리자는 전체
+  const scope = await getCaseScope();
+
   // 병렬로 cases / corrections / extensions 로드
   const [cases, corrections, extensions] = await Promise.all([
     dbSelect<CaseRecord>(
       `SELECT id, case_number, court_region, applicant_name, judge_info, created_at, seq_number,
               commencement_date, approval_date, status, last_crawled_at, unseen_changes,
               filed_date, declared_date, dismissed_date, withdrawn_date, discharged_date, progress_count
-       FROM cases`,
+       FROM cases${scope ? " WHERE assigned_to = ?" : ""}`,
+      scope ? [scope] : [],
     ),
     dbSelect<CorrectionRecord>(
       `SELECT id, case_id, document_type, served_date, received_date, deadline_7d, deadline_date,

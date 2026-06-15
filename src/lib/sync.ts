@@ -239,6 +239,39 @@ export async function syncNotifications(): Promise<number> {
 }
 
 // ─────────────────────────────────────────────
+// 로컬 미러 소유자 체크 — 다른 계정 로그인 시 초기화
+// ─────────────────────────────────────────────
+
+/**
+ * 로컬 SQLite는 PC당 하나라서, 이전에 다른 계정이 동기화한 데이터가 남아있으면
+ * 현재 계정에게 그대로 노출된다. 로그인한 user_id가 마지막 소유자와 다르면
+ * 미러 테이블 전체를 비우고 sync_state를 초기화해 풀 싱크를 유도한다.
+ *
+ * @returns 초기화가 일어났으면 true
+ */
+export async function ensureLocalDataOwner(userId: string): Promise<boolean> {
+  const rows = await dbSelect<{ value: string }>(
+    "SELECT value FROM local_meta WHERE key = 'owner_user_id'",
+  );
+  const owner = rows[0]?.value ?? null;
+  if (owner === userId) return false;
+
+  await dbTx(async (db) => {
+    await db.execute("DELETE FROM cases");
+    await db.execute("DELETE FROM case_corrections");
+    await db.execute("DELETE FROM correction_extensions");
+    await db.execute("DELETE FROM notifications");
+    await db.execute("DELETE FROM profiles");
+    await db.execute("UPDATE sync_state SET last_synced_at = NULL");
+    await db.execute(
+      "INSERT OR REPLACE INTO local_meta (key, value) VALUES ('owner_user_id', ?)",
+      [userId],
+    );
+  });
+  return true;
+}
+
+// ─────────────────────────────────────────────
 // 전체 동기화 진입점
 // ─────────────────────────────────────────────
 

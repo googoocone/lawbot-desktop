@@ -18,6 +18,12 @@ pub fn run() {
             sql: include_str!("../migrations/0002_notifications.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 3,
+            description: "add local_meta",
+            sql: include_str!("../migrations/0003_local_meta.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     tauri::Builder::default()

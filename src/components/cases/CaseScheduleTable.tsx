@@ -1,8 +1,10 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import { Trash2, Loader2 } from "lucide-react";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { formatFullDate } from "@/lib/caseflow/utils/date";
+import { deleteCase } from "@/lib/actions/local";
 import { listUiCache } from "./list-ui-cache";
 import type { CaseRow } from "@/lib/caseflow/case-row";
 
@@ -10,6 +12,8 @@ interface CaseScheduleTableProps {
   cases: CaseRow[];
   onRowClick?: (caseId: string) => void;
   onPopupOpen?: (row: CaseRow) => void;
+  /** 선택 삭제 완료 후 목록 리로드용 */
+  onDeleted?: () => void;
   // 단계/보정기한 필터는 대시보드(요약 카드·단계 칩)와 상태를 공유한다
   stageFilter: string;
   onStageFilterChange: (v: string) => void;
@@ -331,7 +335,7 @@ function DeadlineCell({
 }
 
 export function CaseScheduleTable({
-  cases, onRowClick, onPopupOpen,
+  cases, onRowClick, onPopupOpen, onDeleted,
   stageFilter, onStageFilterChange, deadlineStatusFilter, onDeadlineStatusFilterChange,
 }: CaseScheduleTableProps) {
   // 상세 들어갔다 나와도 유지되도록 캐시에서 초기화 + 변경 시 기록
@@ -354,6 +358,9 @@ export function CaseScheduleTable({
   };
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [warningRow, setWarningRow] = useState<CaseRow | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
 
   const docTypeOptions = useMemo(
@@ -444,6 +451,25 @@ export function CaseScheduleTable({
 
   const isAllSelected = filteredCases.length > 0 && selectedIds.size === filteredCases.length;
   const isSomeSelected = selectedIds.size > 0;
+
+  async function handleDeleteSelected() {
+    if (deleting) return;
+    setDeleting(true);
+    setDeleteError(null);
+    const failedIds: string[] = [];
+    for (const id of selectedIds) {
+      const { error } = await deleteCase(id);
+      if (error) failedIds.push(id);
+    }
+    setDeleting(false);
+    setSelectedIds(new Set(failedIds)); // 실패한 건만 선택 유지
+    if (failedIds.length > 0) {
+      setDeleteError(`${failedIds.length}건은 삭제하지 못했어요. 네트워크 확인 후 다시 시도해주세요.`);
+    } else {
+      setConfirmDelete(false);
+    }
+    onDeleted?.();
+  }
 
   const scrollRef = useRef<HTMLDivElement>(null);
   const ROW_HEIGHT = 38;
@@ -557,9 +583,14 @@ export function CaseScheduleTable({
                       <span className="font-bold text-blue-700 text-[12px] normal-case tracking-normal">{selectedIds.size}건 선택</span>
                       <button onClick={() => setSelectedIds(new Set())} className="text-blue-400 hover:text-blue-600 text-[11px] font-medium transition-colors normal-case tracking-normal">해제</button>
                     </div>
-                    <div className="flex items-center gap-1.5 text-[11px] text-gray-400 normal-case tracking-normal">
-                      {/* TODO: 수정/처리완료/삭제 (다음 단계) */}
-                      일괄 작업 기능 준비 중
+                    <div className="flex items-center gap-1.5 normal-case tracking-normal">
+                      <button
+                        onClick={() => { setDeleteError(null); setConfirmDelete(true); }}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-semibold text-red-600 bg-red-50 hover:bg-red-100 ring-1 ring-red-200 transition-colors"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        선택 삭제
+                      </button>
                     </div>
                   </div>
                 </th>
@@ -724,6 +755,42 @@ export function CaseScheduleTable({
           </tbody>
         </table>
       </div>
+
+      {confirmDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => !deleting && setConfirmDelete(false)}>
+          <div className="bg-white rounded-xl shadow-2xl w-[360px] overflow-hidden" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center gap-3 px-5 py-4 bg-red-50 border-b border-red-100">
+              <Trash2 className="w-5 h-5 text-red-500" />
+              <h3 className="text-sm font-bold text-red-800">사건 삭제</h3>
+            </div>
+            <div className="px-5 py-4 space-y-4">
+              <p className="text-sm text-slate-600 leading-relaxed">
+                선택한 <b className="text-red-600">{selectedIds.size}건</b>의 사건을 삭제할까요?
+                <br />
+                보정·연장 기록도 함께 삭제되며 <b>되돌릴 수 없습니다.</b>
+              </p>
+              {deleteError && <p className="text-xs text-red-500">{deleteError}</p>}
+              <div className="flex gap-2">
+                <button
+                  onClick={() => setConfirmDelete(false)}
+                  disabled={deleting}
+                  className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 text-sm font-medium rounded-lg transition-colors"
+                >
+                  취소
+                </button>
+                <button
+                  onClick={handleDeleteSelected}
+                  disabled={deleting}
+                  className="flex-1 py-2.5 bg-red-600 hover:bg-red-700 disabled:opacity-70 text-white text-sm font-semibold rounded-lg transition-colors inline-flex items-center justify-center gap-1.5"
+                >
+                  {deleting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  {deleting ? "삭제 중..." : "삭제"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {warningRow && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setWarningRow(null)}>

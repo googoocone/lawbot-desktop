@@ -8,6 +8,7 @@ interface Props {
   userName: string;
   onRowClick?: (caseId: string) => void;
   onPopupOpen?: (row: CaseRow) => void;
+  onCasesDeleted?: () => void;
 }
 
 // 상단 카드 = 조치가 필요한 작업함. 단계별 분류는 아래 칩(= 테이블 단계 필터)으로.
@@ -21,7 +22,7 @@ function isUrgentCase(c: CaseRow): boolean {
   return c.deadline_status === "pending";
 }
 
-export function CaseScheduleDashboard({ allCases, userName, onRowClick, onPopupOpen }: Props) {
+export function CaseScheduleDashboard({ allCases, userName, onRowClick, onPopupOpen, onCasesDeleted }: Props) {
   // 상세 들어갔다 나와도 유지되도록 캐시에서 초기화 + 변경 시 기록
   const [work, _setWork] = useState<WorkKey>(listUiCache.work);
   const [sortMode, _setSortMode] = useState<SortMode>(listUiCache.sortMode);
@@ -204,6 +205,7 @@ export function CaseScheduleDashboard({ allCases, userName, onRowClick, onPopupO
             cases={sorted}
             onRowClick={onRowClick}
             onPopupOpen={onPopupOpen}
+            onDeleted={onCasesDeleted}
             stageFilter={stageFilter}
             onStageFilterChange={setStageFilter}
             deadlineStatusFilter={deadlineStatusFilter}
