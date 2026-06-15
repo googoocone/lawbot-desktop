@@ -81,12 +81,22 @@ function App() {
   useEffect(() => {
     if (auth.status === "signed_in") {
       (async () => {
-        // 다른 계정으로 로그인했으면 이전 계정의 로컬 미러를 비운다 (타 계정 사건 노출 방지)
-        const { data: { user } } = await supabase.auth.getUser();
-        if (user && (await ensureLocalDataOwner(user.id))) {
-          console.log("[sync] 계정 변경 감지 — 로컬 데이터 초기화 후 풀 싱크");
+        // 다른 계정으로 로그인했으면 이전 계정의 로컬 미러를 비운다 (타 계정 사건 노출 방지).
+        // 이 단계가 실패해도 목록 로드/동기화는 반드시 진행해야 무한 로딩에 빠지지 않는다.
+        try {
+          const { data: { user } } = await supabase.auth.getUser();
+          if (user && (await ensureLocalDataOwner(user.id))) {
+            console.log("[sync] 계정 변경 감지 — 로컬 데이터 초기화 후 풀 싱크");
+          }
+        } catch (e) {
+          console.error("[init] ensureLocalDataOwner 실패 — 무시하고 진행:", e);
         }
-        reloadRows();
+        try {
+          await reloadRows();
+        } catch (e) {
+          console.error("[init] reloadRows 실패:", e);
+          setLoadingRows(false); // 어떤 경우에도 로딩 스피너는 해제
+        }
         if (!didInitialSync) {
           setDidInitialSync(true);
           handleSync();
