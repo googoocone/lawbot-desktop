@@ -31,6 +31,7 @@ function StageBadge({ stage, date }: { stage: string; date?: string | null }) {
     pending: { label: "접수전", cls: "bg-yellow-50 text-yellow-700 ring-1 ring-yellow-200", dot: "bg-yellow-500" },
     filed: { label: "사건접수", cls: "bg-gray-100 text-gray-600", dot: "bg-gray-400" },
     unconfirmed: { label: "미확인", cls: "bg-gray-50 text-gray-400 ring-1 ring-gray-200", dot: "bg-gray-300" },
+    not_found: { label: "사건 없음", cls: "bg-rose-50 text-rose-500 ring-1 ring-rose-200", dot: "bg-rose-400" },
     commenced: { label: "개시결정", cls: "bg-blue-50 text-blue-700 ring-1 ring-blue-200", dot: "bg-blue-500" },
     approved: { label: "인가결정", cls: "bg-purple-50 text-purple-700 ring-1 ring-purple-200", dot: "bg-purple-500" },
     declared: { label: "파산선고", cls: "bg-amber-50 text-amber-700 ring-1 ring-amber-200", dot: "bg-amber-500" },

@@ -12,6 +12,14 @@ export interface CrawlResult {
 }
 
 async function post(path: string, body: Record<string, unknown>): Promise<CrawlResult> {
+  if (!BASE_URL) {
+    return {
+      ok: false,
+      stdout: "",
+      stderr: "크롤러 서버 주소(VITE_CRAWLER_URL)가 빌드에 설정되지 않았습니다.",
+      exitCode: null,
+    };
+  }
   try {
     const res = await fetch(`${BASE_URL}${path}`, {
       method: "POST",

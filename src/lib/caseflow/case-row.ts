@@ -31,7 +31,7 @@ export interface CaseRow {
   auto_confirmed: boolean;
   arrival_raw: string | null;
   last_crawled_at: string | null;
-  crawl_status: "pending" | "success" | "failed" | null;
+  crawl_status: "pending" | "success" | "failed" | "not_found" | null;
   has_pending_extension: boolean;
   unseen_changes: number;
 }
@@ -126,6 +126,7 @@ export async function loadCaseRows(): Promise<CaseRow[]> {
     const isValidCaseNumber = c.case_number && /^\d{4}\D+\d+/.test(c.case_number);
     let stage: string = "filed";
     if (!isValidCaseNumber) stage = "pending";
+    else if (c.status === "not_found") stage = "not_found";
     else if (c.status === "dismissed") stage = "dismissed";
     else if (c.status === "withdrawn") stage = "withdrawn";
     else if (c.status === "discharged") stage = "discharged";
@@ -207,6 +208,7 @@ export async function loadCaseRows(): Promise<CaseRow[]> {
       last_crawled_at: c.last_crawled_at,
       crawl_status: (() => {
         if (!c.case_number || !isValidCaseNumber) return null;
+        if (c.status === "not_found") return "not_found" as const;
         if (!c.last_crawled_at) return "pending" as const;
         if ((c.progress_count ?? 0) > 0) return "success" as const;
         return "failed" as const;

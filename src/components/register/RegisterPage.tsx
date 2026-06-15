@@ -259,11 +259,15 @@ export function RegisterPage({ onBack, onCreated }: Props) {
     setLoading(false);
     if (res.error) { setError(res.error); return; }
 
-    // 사건번호 있으면 백그라운드로 크롤링 트리거 (fire-and-forget)
+    // 사건번호 있으면 크롤링 트리거. 실패하면 등록은 유지하되 사용자에게 사유를 보여준다.
     if (res.id && caseNumber.trim()) {
-      crawlSingleCase(res.id).then((r) => {
-        if (!r.ok) console.warn("[crawl] single failed:", r.stderr);
-      }).catch((e) => console.error("[crawl] error:", e));
+      const r = await crawlSingleCase(res.id);
+      if (!r.ok) {
+        console.warn("[crawl] single failed:", r.stderr);
+        onCreated(); // 사건 등록 자체는 성공 → 목록 갱신
+        setError(`사건은 등록됐지만 크롤링 서버 연결에 실패했습니다.\n${r.stderr}`);
+        return;
+      }
     }
 
     onCreated();
