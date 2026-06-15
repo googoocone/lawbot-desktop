@@ -59,6 +59,8 @@ jobs:
           VITE_CRAWLER_URL: ${{ secrets.VITE_CRAWLER_URL }}
           VITE_CRAWLER_SECRET: ${{ secrets.VITE_CRAWLER_SECRET }}
         with:
+          # pnpm을 거치지 않고 tauri CLI를 node로 직접 실행 → pnpm의 deps 재검사(install) 회피
+          tauriScript: node node_modules/@tauri-apps/cli/tauri.js
           tagName: ${{ github.ref_name }}
           releaseName: "law-bot 사건관리 ${{ github.ref_name }}"
           releaseBody: "이 버전부터 앱이 자동으로 업데이트됩니다."
