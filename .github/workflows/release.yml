@@ -17,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: 태그에서 버전 동기화 (v0.2.0 → tauri.conf.json "version": "0.2.0")
+      - name: Sync version from tag
         shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
