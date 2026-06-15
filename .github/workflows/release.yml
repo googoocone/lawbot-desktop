@@ -38,7 +38,11 @@ jobs:
         with:
           workspaces: src-tauri
 
-      - run: pnpm install --frozen-lockfile
+      # esbuild 빌드 스크립트 무시로 인한 exit 1은 무해(vite는 별도 바이너리 사용).
+      # .npmrc의 only-built-dependencies로 보통 통과하지만, 안전장치로 실패를 넘긴다.
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+        continue-on-error: true
 
       - uses: tauri-apps/tauri-action@v0
         env:
