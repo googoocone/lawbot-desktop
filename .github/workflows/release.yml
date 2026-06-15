@@ -66,3 +66,30 @@ jobs:
           releaseBody: "이 버전부터 앱이 자동으로 업데이트됩니다."
           releaseDraft: false
           prerelease: false
+
+      # tauriScript로 pnpm을 우회하면 tauri-action이 latest.json을 안 만들므로 직접 생성·첨부.
+      # updater는 이 latest.json을 보고 setup.exe를 받아 설치한다.
+      - name: Generate and upload latest.json
+        shell: pwsh
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $ver = $tag.TrimStart("v")
+          $nsisDir = "src-tauri/target/release/bundle/nsis"
+          $exe = Get-ChildItem "$nsisDir/*-setup.exe" | Select-Object -First 1
+          $sigFile = Get-ChildItem "$nsisDir/*-setup.exe.sig" | Select-Object -First 1
+          if (-not $exe -or -not $sigFile) { Write-Error "setup.exe 또는 .sig를 찾을 수 없음"; exit 1 }
+          $sig = (Get-Content $sigFile.FullName -Raw).Trim()
+          $url = "https://github.com/googoocone/lawbot-desktop/releases/download/$tag/$($exe.Name)"
+          $obj = [ordered]@{
+            version   = $ver
+            notes     = "자동 업데이트"
+            pub_date  = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+            platforms = [ordered]@{
+              "windows-x86_64" = [ordered]@{ signature = $sig; url = $url }
+            }
+          }
+          $obj | ConvertTo-Json -Depth 10 | Set-Content -Encoding utf8 latest.json
+          Write-Host "생성된 latest.json:"; Get-Content latest.json
+          gh release upload $tag latest.json --clobber
