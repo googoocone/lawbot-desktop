@@ -30,7 +30,7 @@ jobs:
 
       - uses: pnpm/action-setup@v4
         with:
-          version: 11
+          version: 11.0.8 # 로컬과 동일 버전 고정 (esbuild 빌드 승인 동작 보장)
 
       - uses: dtolnay/rust-toolchain@stable
 
