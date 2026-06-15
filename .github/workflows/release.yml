@@ -47,6 +47,9 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # pnpm이 'tauri build' 실행 전 deps를 재검사하며 install을 또 돌리는 걸 끔
+          # (esbuild 빌드 무시 exit 1로 빌드가 실패하는 원인)
+          npm_config_verify_deps_before_run: "false"
           # 업데이트 서명 (Secrets에 등록 필요)
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
