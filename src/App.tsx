@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { getDb, dbSelect } from "@/lib/db";
-import { syncAll, ensureLocalDataOwner } from "@/lib/sync";
+import { syncAll, ensureLocalDataOwner, type SyncProgress } from "@/lib/sync";
 import { LoginScreen } from "@/components/auth/LoginScreen";
 import { MainShell, type ShellTab } from "@/components/layout/MainShell";
 import { CaseScheduleDashboard } from "@/components/cases/CaseScheduleDashboard";
@@ -32,7 +32,7 @@ function App() {
   const [auth, setAuth] = useState<AuthState>({ status: "loading" });
   const [view, setView] = useState<View>({ kind: "list" });
   const [syncing, setSyncing] = useState(false);
-  const [syncStage, setSyncStage] = useState("");
+  const [syncProgress, setSyncProgress] = useState<SyncProgress | null>(null);
   const [syncResult, setSyncResult] = useState<string | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [didInitialSync, setDidInitialSync] = useState(false);
@@ -166,11 +166,11 @@ function App() {
     if (syncingRef.current) return;
     syncingRef.current = true;
     setSyncing(true);
-    setSyncStage("");
+    setSyncProgress(null);
     setSyncResult(null);
     setSyncError(null);
     try {
-      const result = await syncAll((stage) => setSyncStage(stage));
+      const result = await syncAll((p) => setSyncProgress(p));
       console.log("[sync] done", result);
       setSyncResult(`사건 ${result.cases} · 보정 ${result.corrections} · 연장 ${result.extensions} · 프로필 ${result.profiles} (${result.elapsedMs}ms)`);
       await reloadRows();
@@ -180,7 +180,7 @@ function App() {
     } finally {
       syncingRef.current = false;
       setSyncing(false);
-      setSyncStage("");
+      setSyncProgress(null);
     }
   }
 
@@ -313,10 +313,28 @@ function App() {
       liveStatus={live}
       changesBadge={unreadChanges}
     >
-      {syncing && syncStage && (
+      {/* 첫 동기화(로컬이 비어 1900건 전체를 받는 중) — 화면 가운데 진행률 */}
+      {syncing && syncProgress && rows.length === 0 && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-50/85 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-xl px-10 py-8 flex flex-col items-center gap-4 w-[320px]">
+            <div className="text-5xl font-bold text-blue-600 tabular-nums">{syncProgress.percent}%</div>
+            <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-blue-600 rounded-full transition-all duration-300"
+                style={{ width: `${syncProgress.percent}%` }}
+              />
+            </div>
+            <p className="text-sm font-medium text-slate-600">{syncProgress.stage} 불러오는 중...</p>
+            <p className="text-xs text-slate-400">처음 한 번만 전체 사건을 내려받아요</p>
+          </div>
+        </div>
+      )}
+      {/* 증분 동기화(이미 데이터가 있을 때) — 상단 얇은 바 */}
+      {syncing && syncProgress && rows.length > 0 && (
         <div className="px-5 py-2 bg-blue-50 border-b border-blue-100 text-xs text-blue-700 flex items-center gap-2">
           <Loader2 className="w-3 h-3 animate-spin" />
-          {syncStage} 동기화 중...
+          {syncProgress.stage} 동기화 중...
+          <span className="font-semibold tabular-nums">{syncProgress.percent}%</span>
         </div>
       )}
       {syncError && (

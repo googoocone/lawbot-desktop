@@ -28,6 +28,7 @@ async function fetchAllChanged<T>(
   sbTable: string,
   lastSyncedAt: string | null,
   timestampColumn = "updated_at",
+  onPage?: (received: number) => void,
 ): Promise<T[]> {
   const PAGE = 1000;
   const out: T[] = [];
@@ -42,10 +43,24 @@ async function fetchAllChanged<T>(
     if (error) throw error;
     if (!data || data.length === 0) break;
     out.push(...(data as T[]));
+    onPage?.(out.length);
     if (data.length < PAGE) break;
     offset += PAGE;
   }
   return out;
+}
+
+// 동기화할 행 개수 — 진행률(%) 계산용. head:true라 데이터는 안 받고 count만.
+async function countChanged(
+  sbTable: string,
+  lastSyncedAt: string | null,
+  timestampColumn = "updated_at",
+): Promise<number> {
+  let q = supabase.from(sbTable).select("id", { count: "exact", head: true });
+  if (lastSyncedAt) q = q.gt(timestampColumn, lastSyncedAt);
+  const { count, error } = await q;
+  if (error) return 0;
+  return count ?? 0;
 }
 
 // ─────────────────────────────────────────────
@@ -66,9 +81,15 @@ function j(v: unknown): string | null {
 // cases
 // ─────────────────────────────────────────────
 
-export async function syncCases(): Promise<number> {
+export async function syncCases(
+  onProgress?: (done: number, total: number) => void,
+): Promise<number> {
   const last = await getLastSyncedAt("cases");
-  const rows = await fetchAllChanged<any>("cf_cases", last);
+  const total = onProgress ? await countChanged("cf_cases", last) : 0;
+  const rows = await fetchAllChanged<any>(
+    "cf_cases", last, "updated_at",
+    onProgress ? (received) => onProgress(received, total) : undefined,
+  );
   if (rows.length === 0) return 0;
 
   await dbTx(async (db) => {
@@ -284,20 +305,31 @@ export interface SyncResult {
   elapsedMs: number;
 }
 
+export interface SyncProgress {
+  stage: string;
+  percent: number;
+}
+
 export async function syncAll(
-  onProgress?: (stage: string) => void,
+  onProgress?: (p: SyncProgress) => void,
 ): Promise<SyncResult> {
   const t0 = performance.now();
-  onProgress?.("프로필");
+  // cases가 데이터의 대부분이라 5~88% 구간을 cases 진행률에 할당하고,
+  // 나머지 가벼운 테이블은 88~100%로 빠르게 채운다.
+  onProgress?.({ stage: "준비 중", percent: 0 });
   const profiles = await syncProfiles();
-  onProgress?.("사건");
-  const cases = await syncCases();
-  onProgress?.("보정");
+  onProgress?.({ stage: "사건", percent: 5 });
+  const cases = await syncCases((done, total) => {
+    const p = total > 0 ? 5 + Math.round((done / total) * 83) : 5;
+    onProgress?.({ stage: "사건", percent: Math.min(88, p) });
+  });
+  onProgress?.({ stage: "보정", percent: 90 });
   const corrections = await syncCorrections();
-  onProgress?.("연장");
+  onProgress?.({ stage: "연장", percent: 94 });
   const extensions = await syncExtensions();
-  onProgress?.("알림");
+  onProgress?.({ stage: "알림", percent: 97 });
   const notifications = await syncNotifications();
+  onProgress?.({ stage: "완료", percent: 100 });
   return {
     cases,
     corrections,
