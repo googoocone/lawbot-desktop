@@ -30,6 +30,7 @@ function StageBadge({ stage, date }: { stage: string; date?: string | null }) {
   const config: Record<string, { label: string; cls: string; dot: string }> = {
     pending: { label: "접수전", cls: "bg-yellow-50 text-yellow-700 ring-1 ring-yellow-200", dot: "bg-yellow-500" },
     filed: { label: "사건접수", cls: "bg-gray-100 text-gray-600", dot: "bg-gray-400" },
+    unconfirmed: { label: "미확인", cls: "bg-gray-50 text-gray-400 ring-1 ring-gray-200", dot: "bg-gray-300" },
     commenced: { label: "개시결정", cls: "bg-blue-50 text-blue-700 ring-1 ring-blue-200", dot: "bg-blue-500" },
     approved: { label: "인가결정", cls: "bg-purple-50 text-purple-700 ring-1 ring-purple-200", dot: "bg-purple-500" },
     declared: { label: "파산선고", cls: "bg-amber-50 text-amber-700 ring-1 ring-amber-200", dot: "bg-amber-500" },
@@ -700,7 +701,12 @@ export function CaseScheduleTable({
                       </span>
                     )}
                   </td>
-                  <td className={td}><StageBadge stage={c.stage} date={c.stage_date} /></td>
+                  <td className={td}>
+                    {/* 크롤링으로 단계가 확인되지 않은 사건(미크롤/조회실패)은 등록일을 접수일처럼 표시하지 않고 '미확인' 처리 */}
+                    {c.stage === "filed" && c.crawl_status !== "success"
+                      ? <StageBadge stage="unconfirmed" />
+                      : <StageBadge stage={c.stage} date={c.stage_date} />}
+                  </td>
                   <td className={td}>{c.document_type || "-"}</td>
                   <td className={td}>
                     {c.received_date ? (

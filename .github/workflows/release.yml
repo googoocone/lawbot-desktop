@@ -77,11 +77,14 @@ jobs:
           $tag = "${{ github.ref_name }}"
           $ver = $tag.TrimStart("v")
           $nsisDir = "src-tauri/target/release/bundle/nsis"
-          $exe = Get-ChildItem "$nsisDir/*-setup.exe" | Select-Object -First 1
           $sigFile = Get-ChildItem "$nsisDir/*-setup.exe.sig" | Select-Object -First 1
-          if (-not $exe -or -not $sigFile) { Write-Error "setup.exe 또는 .sig를 찾을 수 없음"; exit 1 }
+          if (-not $sigFile) { Write-Error ".sig를 찾을 수 없음"; exit 1 }
           $sig = (Get-Content $sigFile.FullName -Raw).Trim()
-          $url = "https://github.com/googoocone/lawbot-desktop/releases/download/$tag/$($exe.Name)"
+          # 빌드 폴더 원본명은 한글일 수 있고, tauri-action은 ASCII로 바꿔 업로드함.
+          # 실제 릴리스에 올라간 setup.exe 이름을 조회해 URL을 만들어야 404가 안 난다.
+          $exeName = gh release view $tag --json assets --jq '.assets[] | select(.name | endswith("-setup.exe")) | .name'
+          if (-not $exeName) { Write-Error "릴리스에서 setup.exe asset을 찾을 수 없음"; exit 1 }
+          $url = "https://github.com/googoocone/lawbot-desktop/releases/download/$tag/$exeName"
           $obj = [ordered]@{
             version   = $ver
             notes     = "자동 업데이트"
