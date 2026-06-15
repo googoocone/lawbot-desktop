@@ -26,7 +26,17 @@ pub fn run() {
         },
     ];
 
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default();
+
+    // 데스크탑 전용 — 자동 업데이트 (모바일 타깃에는 플러그인이 없음)
+    #[cfg(desktop)]
+    {
+        builder = builder
+            .plugin(tauri_plugin_updater::Builder::new().build())
+            .plugin(tauri_plugin_process::init());
+    }
+
+    builder
         .plugin(tauri_plugin_opener::init())
         .plugin(
             tauri_plugin_sql::Builder::default()

@@ -70,8 +70,14 @@ pnpm build              # tsc + vite build만 (타입체크 겸용 — 테스트
 
 ### Tauri 셸 (`src-tauri/`)
 
-- Rust 커스텀 커맨드 없음 — 플러그인만 사용: `tauri-plugin-sql`(sqlite, 마이그레이션), `tauri-plugin-autostart`, `tauri-plugin-opener`
+- Rust 커스텀 커맨드 없음 — 플러그인만 사용: `tauri-plugin-sql`(sqlite, 마이그레이션), `tauri-plugin-autostart`, `tauri-plugin-opener`, `tauri-plugin-updater`+`tauri-plugin-process`(자동 업데이트, desktop 전용 `#[cfg(desktop)]`)
 - 플러그인 권한은 `src-tauri/capabilities/default.json`에 선언됨. 새 플러그인/권한 추가 시 이 파일도 수정 필요.
+
+### 자동 업데이트 / 배포
+
+- **GitHub Releases 기반.** `v*` 태그 push → `.github/workflows/release.yml`이 빌드·서명·릴리스. 앱은 시작 시 `src/lib/updater.ts`로 `releases/latest/download/latest.json` 조회 → 새 버전이면 `src/components/layout/UpdateBanner.tsx` 배너 표시. 자세한 절차는 `RELEASE.md`.
+- 서명 키: private은 `~/.tauri/lawbot-desktop.key`(절대 커밋 금지, `.gitignore`의 `*.key`), public은 `tauri.conf.json`의 `plugins.updater.pubkey`에 박혀 있음. CI는 키·VITE 환경변수를 GitHub Secrets에서 주입.
+- 버전은 `tauri.conf.json`을 직접 고치지 말 것 — 릴리스 시 태그(`v0.2.0`)에서 workflow가 자동 주입.
 
 ## 도메인 용어
 

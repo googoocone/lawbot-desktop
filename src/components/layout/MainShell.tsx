@@ -1,6 +1,7 @@
 import { Bot, LogOut, RefreshCw, List, Calendar, FilePlus, Bell } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { SettingsMenu } from "./SettingsMenu";
+import { UpdateBanner } from "./UpdateBanner";
 
 export type ShellTab = "list" | "changes" | "calendar" | "register";
 export type LiveStatus = "idle" | "subscribing" | "ready" | "error" | null;
@@ -101,6 +102,8 @@ export function MainShell({
           </div>
         </div>
       </header>
+
+      <UpdateBanner />
 
       <main className="flex-1 min-h-0 overflow-auto flex flex-col">{children}</main>
     </div>

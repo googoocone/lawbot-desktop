@@ -17,6 +17,10 @@ dist-ssr
 .env.*
 !.env.example
 
+# 업데이터 서명 키 (절대 커밋 금지! private key는 ~/.tauri/ 에 보관)
+*.key
+*.key.pub
+
 # 빌드 산출물 / 대용량 바이너리 (재생성 가능 — GitHub 100MB 제한 회피)
 src-tauri/target
 src-tauri/binaries
