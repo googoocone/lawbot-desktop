@@ -1,4 +1,6 @@
+import { useState, useEffect } from "react";
 import { Bot, LogOut, RefreshCw, List, Calendar, FilePlus, Bell } from "lucide-react";
+import { getVersion } from "@tauri-apps/api/app";
 import { supabase } from "@/lib/supabase";
 import { SettingsMenu } from "./SettingsMenu";
 import { UpdateBanner } from "./UpdateBanner";
@@ -22,6 +24,11 @@ interface MainShellProps {
 export function MainShell({
   email, children, onSync, syncing, activeTab, onTabChange, liveStatus, changesBadge,
 }: MainShellProps) {
+  const [appVersion, setAppVersion] = useState("");
+  useEffect(() => {
+    getVersion().then(setAppVersion).catch(() => {});
+  }, []);
+
   async function handleSignOut() {
     await supabase.auth.signOut();
   }
@@ -39,6 +46,11 @@ export function MainShell({
               <div className="text-[13px] font-semibold text-slate-900 tracking-tight">
                 law-bot 사건관리
               </div>
+              {appVersion && (
+                <span className="text-[10px] font-medium text-slate-400 px-1.5 py-0.5 bg-slate-100 rounded-md">
+                  v{appVersion}
+                </span>
+              )}
             </div>
 
             {activeTab && onTabChange && (
