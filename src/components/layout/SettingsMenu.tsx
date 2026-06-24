@@ -1,11 +1,13 @@
 import { useState, useEffect, useRef } from "react";
-import { Settings, Power, Check } from "lucide-react";
+import { Settings, Power, Check, RefreshCw, Loader2 } from "lucide-react";
 import { isEnabled, enable, disable } from "@tauri-apps/plugin-autostart";
+import { clearLocalMirror } from "@/lib/sync";
 
 export function SettingsMenu() {
   const [open, setOpen] = useState(false);
   const [autoStart, setAutoStart] = useState<boolean | null>(null);
   const [busy, setBusy] = useState(false);
+  const [resyncing, setResyncing] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -22,6 +24,20 @@ export function SettingsMenu() {
     document.addEventListener("mousedown", handler);
     return () => document.removeEventListener("mousedown", handler);
   }, [open]);
+
+  async function handleResync() {
+    if (resyncing) return;
+    if (!window.confirm("로컬 데이터를 비우고 서버에서 전체를 다시 받습니다.\n잠시 후 앱이 새로고침됩니다. 계속할까요?")) return;
+    setResyncing(true);
+    try {
+      // 미러를 비우고 sync_state 초기화 → 새로고침 후 시작 동기화가 풀 싱크로 다시 받음
+      await clearLocalMirror();
+      window.location.reload();
+    } catch (e) {
+      console.error("[resync] 실패", e);
+      setResyncing(false);
+    }
+  }
 
   async function toggleAutoStart() {
     if (autoStart === null || busy) return;
@@ -79,6 +95,24 @@ export function SettingsMenu() {
                     <Check className="w-3 h-3 text-blue-500 absolute top-0.5 left-0.5" />
                   )}
                 </span>
+              </div>
+            </button>
+
+            <button
+              onClick={handleResync}
+              disabled={resyncing}
+              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-gray-50 transition-colors text-left disabled:opacity-60"
+            >
+              {resyncing ? (
+                <Loader2 className="w-4 h-4 text-slate-400 flex-shrink-0 animate-spin" />
+              ) : (
+                <RefreshCw className="w-4 h-4 text-slate-400 flex-shrink-0" />
+              )}
+              <div className="flex-1">
+                <div className="text-sm text-gray-800">로컬 데이터 재동기화</div>
+                <div className="text-[11px] text-gray-400">
+                  사건 수가 서버와 다를 때 — 비우고 전체 다시 받기
+                </div>
               </div>
             </button>
           </div>

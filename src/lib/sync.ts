@@ -63,6 +63,25 @@ async function countChanged(
   return count ?? 0;
 }
 
+// 서버 테이블의 전체 id 집합 — 삭제 정합성용. id만 받아 가볍다.
+async function fetchAllIds(sbTable: string): Promise<Set<string>> {
+  const PAGE = 1000;
+  const ids = new Set<string>();
+  let offset = 0;
+  while (true) {
+    const { data, error } = await supabase
+      .from(sbTable)
+      .select("id")
+      .range(offset, offset + PAGE - 1);
+    if (error) throw error;
+    if (!data || data.length === 0) break;
+    for (const r of data as { id: string }[]) ids.add(r.id);
+    if (data.length < PAGE) break;
+    offset += PAGE;
+  }
+  return ids;
+}
+
 // ─────────────────────────────────────────────
 // 변환 헬퍼
 // ─────────────────────────────────────────────
@@ -264,6 +283,22 @@ export async function syncNotifications(): Promise<number> {
 // ─────────────────────────────────────────────
 
 /**
+ * 로컬 미러 테이블 전체를 비우고 sync_state를 초기화한다 (다음 syncAll이 풀 싱크가 됨).
+ * owner_user_id 등 local_meta는 건드리지 않는다.
+ * "로컬 데이터 재동기화"(설정 버튼)와 계정 변경 초기화가 공유한다.
+ */
+export async function clearLocalMirror(): Promise<void> {
+  await dbTx(async (db) => {
+    await db.execute("DELETE FROM cases");
+    await db.execute("DELETE FROM case_corrections");
+    await db.execute("DELETE FROM correction_extensions");
+    await db.execute("DELETE FROM notifications");
+    await db.execute("DELETE FROM profiles");
+    await db.execute("UPDATE sync_state SET last_synced_at = NULL");
+  });
+}
+
+/**
  * 로컬 SQLite는 PC당 하나라서, 이전에 다른 계정이 동기화한 데이터가 남아있으면
  * 현재 계정에게 그대로 노출된다. 로그인한 user_id가 마지막 소유자와 다르면
  * 미러 테이블 전체를 비우고 sync_state를 초기화해 풀 싱크를 유도한다.
@@ -277,19 +312,57 @@ export async function ensureLocalDataOwner(userId: string): Promise<boolean> {
   const owner = rows[0]?.value ?? null;
   if (owner === userId) return false;
 
-  await dbTx(async (db) => {
-    await db.execute("DELETE FROM cases");
-    await db.execute("DELETE FROM case_corrections");
-    await db.execute("DELETE FROM correction_extensions");
-    await db.execute("DELETE FROM notifications");
-    await db.execute("DELETE FROM profiles");
-    await db.execute("UPDATE sync_state SET last_synced_at = NULL");
-    await db.execute(
-      "INSERT OR REPLACE INTO local_meta (key, value) VALUES ('owner_user_id', ?)",
-      [userId],
-    );
-  });
+  await clearLocalMirror();
+  await dbExecute(
+    "INSERT OR REPLACE INTO local_meta (key, value) VALUES ('owner_user_id', ?)",
+    [userId],
+  );
   return true;
+}
+
+// ─────────────────────────────────────────────
+// 삭제 정합성 — 서버에서 사라진 행을 로컬에서도 제거
+//
+// syncAll은 INSERT OR REPLACE(upsert)만 하고 삭제는 안 한다. 서버에서 사건이
+// 삭제(예: 중복 정리)될 때 앱이 꺼져 있었으면 Realtime DELETE를 놓쳐 로컬에
+// 유령 행이 남는다. 동기화 끝에 서버 id 집합과 대조해 로컬 잉여 행을 지운다.
+// ─────────────────────────────────────────────
+
+const RECONCILE_TABLES: { sb: string; local: string }[] = [
+  { sb: "cf_cases", local: "cases" },
+  { sb: "cf_case_corrections", local: "case_corrections" },
+  { sb: "cf_correction_extensions", local: "correction_extensions" },
+];
+
+export async function reconcileDeletes(): Promise<number> {
+  let removed = 0;
+  for (const { sb, local } of RECONCILE_TABLES) {
+    try {
+      const serverIds = await fetchAllIds(sb);
+      // 안전장치: 서버가 0건을 반환(일시적 RLS/인증 문제 등)하면 로컬 전체가 지워질 수 있어
+      // 아예 건너뛴다. 정상 운영 상태에서 cases가 0인 경우는 없다.
+      if (serverIds.size === 0) continue;
+
+      const localRows = await dbSelect<{ id: string }>(`SELECT id FROM ${local}`);
+      const stale = localRows.map((r) => r.id).filter((id) => !serverIds.has(id));
+      if (stale.length === 0) continue;
+
+      const CHUNK = 400;
+      await dbTx(async (db) => {
+        for (let i = 0; i < stale.length; i += CHUNK) {
+          const chunk = stale.slice(i, i + CHUNK);
+          const placeholders = chunk.map(() => "?").join(",");
+          await db.execute(`DELETE FROM ${local} WHERE id IN (${placeholders})`, chunk);
+        }
+      });
+      removed += stale.length;
+      console.log(`[sync] reconcile ${local}: 잉여 ${stale.length}건 삭제`);
+    } catch (e) {
+      // 서버 id 조회 실패 시 그 테이블은 삭제하지 않고 넘어간다 (오삭제 방지).
+      console.error(`[sync] reconcile ${local} 건너뜀 (조회 실패):`, e);
+    }
+  }
+  return removed;
 }
 
 // ─────────────────────────────────────────────
@@ -302,6 +375,7 @@ export interface SyncResult {
   extensions: number;
   profiles: number;
   notifications: number;
+  deleted: number;
   elapsedMs: number;
 }
 
@@ -327,8 +401,11 @@ export async function syncAll(
   const corrections = await syncCorrections();
   onProgress?.({ stage: "연장", percent: 94 });
   const extensions = await syncExtensions();
-  onProgress?.({ stage: "알림", percent: 97 });
+  onProgress?.({ stage: "알림", percent: 96 });
   const notifications = await syncNotifications();
+  // 서버에서 삭제된 사건/보정/연장을 로컬에서도 제거 (앱이 꺼져 있어 놓친 삭제 따라잡기)
+  onProgress?.({ stage: "정리", percent: 98 });
+  const deleted = await reconcileDeletes();
   onProgress?.({ stage: "완료", percent: 100 });
   return {
     cases,
@@ -336,6 +413,7 @@ export async function syncAll(
     extensions,
     profiles,
     notifications,
+    deleted,
     elapsedMs: Math.round(performance.now() - t0),
   };
 }

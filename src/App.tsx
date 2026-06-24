@@ -172,7 +172,7 @@ function App() {
     try {
       const result = await syncAll((p) => setSyncProgress(p));
       console.log("[sync] done", result);
-      setSyncResult(`사건 ${result.cases} · 보정 ${result.corrections} · 연장 ${result.extensions} · 프로필 ${result.profiles} (${result.elapsedMs}ms)`);
+      setSyncResult(`사건 ${result.cases} · 보정 ${result.corrections} · 연장 ${result.extensions} · 프로필 ${result.profiles}${result.deleted > 0 ? ` · 삭제 ${result.deleted}` : ""} (${result.elapsedMs}ms)`);
       await reloadRows();
     } catch (e: any) {
       console.error("[sync] failed", e);
