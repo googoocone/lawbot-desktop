@@ -1,0 +1,5 @@
+# 마이그레이션 SQL은 줄바꿈을 LF로 고정한다.
+# tauri-plugin-sql(sqlx)은 .sql 파일 바이트로 마이그레이션 체크섬을 계산하므로,
+# CRLF/LF가 섞이면 "migration N ... has been modified" 충돌이 난다.
+# CI(리눅스)와 로컬(윈도우)이 동일한 체크섬을 갖도록 강제.
+*.sql text eol=lf

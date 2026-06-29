@@ -1,6 +1,8 @@
 import Database from "@tauri-apps/plugin-sql";
 
-const DB_URL = "sqlite:caseflow.db";
+// dev에선 별도 DB 파일(caseflow_dev.db)을 쓴다 — src-tauri/src/lib.rs의 DB_URL과 반드시 일치해야 함.
+// (설치된 릴리스 앱과 DB를 분리해 마이그레이션 체크섬 충돌을 막기 위함)
+const DB_URL = import.meta.env.DEV ? "sqlite:caseflow_dev.db" : "sqlite:caseflow.db";
 
 let dbPromise: Promise<Database> | null = null;
 

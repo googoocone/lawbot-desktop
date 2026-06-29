@@ -1,6 +1,11 @@
 use tauri_plugin_autostart::MacosLauncher;
 use tauri_plugin_sql::{Migration, MigrationKind};
 
+// dev 빌드는 별도 DB 파일을 써서 설치된 릴리스 앱과 DB(=마이그레이션 체크섬)를
+// 공유하지 않게 한다. (CRLF/LF 차이 등으로 인한 "migration ... has been modified" 충돌 방지)
+#[cfg(debug_assertions)]
+const DB_URL: &str = "sqlite:caseflow_dev.db";
+#[cfg(not(debug_assertions))]
 const DB_URL: &str = "sqlite:caseflow.db";
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

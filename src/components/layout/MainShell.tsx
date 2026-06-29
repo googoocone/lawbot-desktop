@@ -1,11 +1,11 @@
 import { useState, useEffect } from "react";
-import { Bot, LogOut, RefreshCw, List, Calendar, FilePlus, Bell } from "lucide-react";
+import { Bot, LogOut, RefreshCw, List, Calendar, FilePlus, Bell, Megaphone } from "lucide-react";
 import { getVersion } from "@tauri-apps/api/app";
 import { supabase } from "@/lib/supabase";
 import { SettingsMenu } from "./SettingsMenu";
 import { UpdateBanner } from "./UpdateBanner";
 
-export type ShellTab = "list" | "changes" | "calendar" | "register";
+export type ShellTab = "list" | "changes" | "calendar" | "register" | "notices";
 export type LiveStatus = "idle" | "subscribing" | "ready" | "error" | null;
 
 interface MainShellProps {
@@ -79,6 +79,12 @@ export function MainShell({
                   icon={<FilePlus className="w-3.5 h-3.5" />}
                   label="사건 등록"
                   onClick={() => onTabChange("register")}
+                />
+                <TabButton
+                  active={activeTab === "notices"}
+                  icon={<Megaphone className="w-3.5 h-3.5" />}
+                  label="공지사항"
+                  onClick={() => onTabChange("notices")}
                 />
               </div>
             )}

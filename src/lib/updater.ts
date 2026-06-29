@@ -19,6 +19,10 @@ let pendingUpdate: Update | null = null;
 
 // 업데이트 확인 — 있으면 정보 반환, 없거나 dev/브라우저면 null
 export async function checkForUpdate(): Promise<UpdateInfo | null> {
+  // dev 빌드는 버전이 항상 0.1.0(tauri.conf.json)이라 릴리스보다 낮게 인식돼
+  // 켤 때마다 업데이트 배너가 뜬다. 개발 중엔 체크 자체를 건너뛴다.
+  // (프로덕션 빌드에선 import.meta.env.DEV === false 라 정상 동작)
+  if (import.meta.env.DEV) return null;
   try {
     const update = await check();
     if (!update) return null;

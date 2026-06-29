@@ -84,20 +84,12 @@ export function CaseScheduleDashboard({ allCases, userName, onRowClick, onPopupO
 
   const sorted = useMemo(() => {
     if (sortMode === "seq") return filtered;
-    const getPriority = (c: CaseRow) => {
-      if (c.deadline_status === "submitted") return 1;
-      if (c.deadline_status === "overdue" || c.deadline_status === "pending" || c.has_pending_extension) return 0;
-      if (!c.deadline_date && !c.received_date) return 3;
-      return 2;
-    };
-    return [...filtered].sort((a, b) => {
-      const pa = getPriority(a);
-      const pb = getPriority(b);
-      if (pa !== pb) return pa - pb;
-      const aDate = a.deadline_date || a.received_date || "z";
-      const bDate = b.deadline_date || b.received_date || "z";
-      return aDate.localeCompare(bDate);
-    });
+    // 기한순 = 처리할 보정 작업 큐. 제출완료(초록 ✓)와 기한 없는 사건은 빼고,
+    // 미제출 보정기한만 남긴다. 엑셀처럼 급한(기한 임박·경과) 사건이 맨 아래로
+    // 정렬 — 기본 스크롤이 맨 아래라 급한 게 바로 보인다.
+    return filtered
+      .filter((c) => c.deadline_date && c.deadline_status !== "submitted")
+      .sort((a, b) => (b.deadline_date as string).localeCompare(a.deadline_date as string));
   }, [filtered, sortMode]);
 
   const newBadge = (count: number, color: string) => count > 0 ? (
@@ -210,6 +202,7 @@ export function CaseScheduleDashboard({ allCases, userName, onRowClick, onPopupO
             onStageFilterChange={setStageFilter}
             deadlineStatusFilter={deadlineStatusFilter}
             onDeadlineStatusFilterChange={handleDeadlineFilterChange}
+            sortMode={sortMode}
           />
         </div>
       </div>

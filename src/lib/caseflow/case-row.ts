@@ -12,6 +12,7 @@ export interface CaseRow {
   case_number: string | null;
   applicant_name: string;
   judge_info: string | null;
+  manager_name: string | null;
   stage: string;
   stage_date: string | null;
   document_type: string | null;
@@ -47,6 +48,8 @@ interface CaseRecord {
   commencement_date: string | null;
   approval_date: string | null;
   status: string;
+  assigned_to: string | null;
+  staff_name: string | null;
   last_crawled_at: string | null;
   unseen_changes: number;
   filed_date: string | null;
@@ -85,11 +88,11 @@ export async function loadCaseRows(): Promise<CaseRow[]> {
   // 가시성: staff는 본인 담당 사건만, 관리자는 전체
   const scope = await getCaseScope();
 
-  // 병렬로 cases / corrections / extensions 로드
-  const [cases, corrections, extensions] = await Promise.all([
+  // 병렬로 cases / corrections / extensions / profiles 로드
+  const [cases, corrections, extensions, profiles] = await Promise.all([
     dbSelect<CaseRecord>(
       `SELECT id, case_number, court_region, applicant_name, judge_info, created_at, seq_number,
-              commencement_date, approval_date, status, last_crawled_at, unseen_changes,
+              commencement_date, approval_date, status, assigned_to, staff_name, last_crawled_at, unseen_changes,
               filed_date, declared_date, dismissed_date, withdrawn_date, discharged_date, progress_count
        FROM cases${scope ? " WHERE assigned_to = ?" : ""}`,
       scope ? [scope] : [],
@@ -103,7 +106,14 @@ export async function loadCaseRows(): Promise<CaseRow[]> {
       `SELECT id, correction_id, extension_number, extension_date, new_deadline
        FROM correction_extensions`,
     ),
+    dbSelect<{ id: string; name: string | null }>(
+      `SELECT id, name FROM profiles`,
+    ),
   ]);
+
+  // profile id → 이름 맵 (담당자 표시용)
+  const nameById = new Map<string, string | null>();
+  for (const p of profiles) nameById.set(p.id, p.name);
 
   // correction_id → extensions[] 맵
   const extByCorrection = new Map<string, ExtensionRecord[]>();
@@ -185,6 +195,7 @@ export async function loadCaseRows(): Promise<CaseRow[]> {
       case_number: c.case_number,
       applicant_name: c.applicant_name,
       judge_info: c.judge_info,
+      manager_name: (c.assigned_to ? nameById.get(c.assigned_to) : null) || c.staff_name || null,
       stage,
       stage_date: stageDate[stage] || null,
       document_type: latestCorrection?.document_type || null,

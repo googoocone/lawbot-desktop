@@ -11,6 +11,7 @@ import { CalendarPage } from "@/components/calendar/CalendarPage";
 import { RegisterPage } from "@/components/register/RegisterPage";
 import { CaseEditPage } from "@/components/cases/CaseEditPage";
 import { ChangesPage } from "@/components/changes/ChangesPage";
+import { NoticesPage } from "@/components/notices/NoticesPage";
 import { loadCaseRows, type CaseRow } from "@/lib/caseflow/case-row";
 import { subscribeRealtime, type RealtimeStatus } from "@/lib/realtime";
 
@@ -24,6 +25,7 @@ type View =
   | { kind: "changes" }
   | { kind: "calendar" }
   | { kind: "register" }
+  | { kind: "notices" }
   // from: 어느 탭에서 들어왔는지 — 뒤로가기/삭제 후 그 탭으로 복귀
   | { kind: "detail"; id: string; from: ShellTab }
   | { kind: "edit"; id: string; from: ShellTab };
@@ -299,6 +301,23 @@ function App() {
           onBack={() => setView({ kind: "list" })}
           onCreated={reloadRows}
         />
+      </MainShell>
+    );
+  }
+
+  // 공지사항 화면
+  if (view.kind === "notices") {
+    return (
+      <MainShell
+        email={auth.email}
+        onSync={handleSync}
+        syncing={syncing}
+        activeTab="notices"
+        onTabChange={(t) => setView({ kind: t })}
+        liveStatus={live}
+        changesBadge={unreadChanges}
+      >
+        <NoticesPage email={auth.email} />
       </MainShell>
     );
   }

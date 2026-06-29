@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Trash2, Loader2 } from "lucide-react";
@@ -19,6 +19,8 @@ interface CaseScheduleTableProps {
   onStageFilterChange: (v: string) => void;
   deadlineStatusFilter: string;
   onDeadlineStatusFilterChange: (v: string) => void;
+  // 정렬 모드(번호순/기한순) — 바뀌면 맨 아래(엑셀식·급한 쪽)로 재앵커
+  sortMode?: "seq" | "deadline";
 }
 
 function fmtDate(d: string | null) {
@@ -339,6 +341,7 @@ function DeadlineCell({
 export function CaseScheduleTable({
   cases, onRowClick, onPopupOpen, onDeleted,
   stageFilter, onStageFilterChange, deadlineStatusFilter, onDeadlineStatusFilterChange,
+  sortMode,
 }: CaseScheduleTableProps) {
   // 상세 들어갔다 나와도 유지되도록 캐시에서 초기화 + 변경 시 기록
   const [searchQuery, _setSearchQuery] = useState(listUiCache.searchQuery);
@@ -480,6 +483,8 @@ export function CaseScheduleTable({
     getScrollElement: () => scrollRef.current,
     estimateSize: () => ROW_HEIGHT,
     overscan: 12,
+    // 돌아왔을 때 이전 위치에서 가상 측정을 시작하도록 초기 오프셋 지정 (빗나감 방지)
+    initialOffset: listUiCache.scrollTop ?? undefined,
   });
   const virtualItems = rowVirtualizer.getVirtualItems();
   const totalSize = rowVirtualizer.getTotalSize();
@@ -488,18 +493,24 @@ export function CaseScheduleTable({
 
   // 엑셀처럼 첫 화면은 최근 사건(번호 큰 쪽 = 맨 아래)이 보이도록 시작.
   // 상세 들어갔다 나온 경우엔 보고 있던 위치를 복원.
-  // scrollToIndex는 동적 측정 모드에서 첫 마운트에 빗나가는 경우가 있어 컨테이너를 직접 내린다.
+  // react-virtual은 마운트 직후 컨테이너 scrollTop(=0)을 다시 읽어 위치를 되돌리고,
+  // 행 측정으로 총 높이가 몇 프레임에 걸쳐 갱신된다. 한 번 설정으론 빗나가므로
+  // 여러 프레임 동안 목표 위치를 반복 재적용해 확실히 안착시킨다.
   const didInitialScroll = useRef(false);
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (didInitialScroll.current || filteredCases.length === 0) return;
     didInitialScroll.current = true;
     const saved = listUiCache.scrollTop;
-    requestAnimationFrame(() => {
-      requestAnimationFrame(() => {
-        const el = scrollRef.current;
-        if (el) el.scrollTop = saved != null ? saved : el.scrollHeight;
-      });
-    });
+    let tries = 0;
+    const tick = () => {
+      const el = scrollRef.current;
+      if (el) {
+        const want = saved != null ? saved : el.scrollHeight;
+        if (Math.abs(el.scrollTop - want) > 2) el.scrollTop = want;
+      }
+      if (++tries < 12) requestAnimationFrame(tick);
+    };
+    tick();
   }, [filteredCases.length]);
 
   // 단계/보정기한 필터가 바뀌면(걸든 풀든) 맨 아래(최신)부터 보이도록 스크롤.
@@ -513,7 +524,7 @@ export function CaseScheduleTable({
         if (el) el.scrollTop = el.scrollHeight;
       });
     });
-  }, [stageFilter, deadlineStatusFilter]);
+  }, [stageFilter, deadlineStatusFilter, sortMode]);
 
   if (cases.length === 0) {
     return <EmptyState icon="📂" message="아직 등록된 사건이 없어요" description="사건을 등록하면 여기에 표시됩니다." />;
@@ -541,12 +552,13 @@ export function CaseScheduleTable({
         onScroll={(e) => { listUiCache.scrollTop = e.currentTarget.scrollTop; }}
         className="overflow-auto flex-1 min-h-0"
       >
-        <table className="w-full text-xs border-collapse table-fixed min-w-[960px]">
+        <table className="w-full text-xs border-collapse table-fixed min-w-[1032px]">
           <colgroup>
             <col style={{ width: 40 }} />
             <col style={{ width: 60 }} />
             <col style={{ width: 130 }} />
             <col style={{ width: 80 }} />
+            <col style={{ width: 72 }} />
             <col style={{ width: 160 }} />
             <col style={{ width: 130 }} />
             <col style={{ width: 100 }} />
@@ -579,7 +591,7 @@ export function CaseScheduleTable({
                 </div>
               </th>
               {isSomeSelected ? (
-                <th colSpan={9} className={`${th} !text-left`}>
+                <th colSpan={10} className={`${th} !text-left`}>
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-2.5">
                       <span className="font-bold text-blue-700 text-[12px] normal-case tracking-normal">{selectedIds.size}건 선택</span>
@@ -601,6 +613,7 @@ export function CaseScheduleTable({
                   <th className={`${th} text-left`}>법원명</th>
                   <th className={`${th} text-left`}>사건번호</th>
                   <th className={`${th} text-left`}>의뢰인</th>
+                  <th className={`${th} text-left`}>담당자</th>
                   <th className={`${th} w-28`}>
                     <FilterDropdown
                       value={stageFilter}
@@ -648,7 +661,7 @@ export function CaseScheduleTable({
           <tbody>
             {paddingTop > 0 && (
               <tr aria-hidden style={{ height: paddingTop }}>
-                <td colSpan={10} />
+                <td colSpan={11} />
               </tr>
             )}
             {virtualItems.map((vi) => {
@@ -701,6 +714,11 @@ export function CaseScheduleTable({
                         ⚠ 크롤링 실패
                       </span>
                     )}
+                  </td>
+                  <td className={`${td} text-left`}>
+                    {c.manager_name
+                      ? <span className="text-gray-700">{c.manager_name}</span>
+                      : <span className="text-gray-300">-</span>}
                   </td>
                   <td className={td}>
                     {/* 크롤링으로 단계가 확인되지 않은 사건(미크롤/조회실패)은 등록일을 접수일처럼 표시하지 않고 '미확인' 처리 */}
@@ -756,7 +774,7 @@ export function CaseScheduleTable({
             })}
             {paddingBottom > 0 && (
               <tr aria-hidden style={{ height: paddingBottom }}>
-                <td colSpan={10} />
+                <td colSpan={11} />
               </tr>
             )}
           </tbody>
