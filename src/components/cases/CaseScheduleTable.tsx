@@ -77,6 +77,9 @@ export const STAGE_OPTIONS: { value: string; label: string; dot: string }[] = [
   { value: "withdrawn", label: "취하", dot: "bg-orange-500" },
 ];
 
+// 담당자 미지정 사건을 거르기 위한 센티널 값 (실제 이름과 충돌하지 않게)
+const MANAGER_NONE = "__none__";
+
 const DEADLINE_STATUS_OPTIONS: DropdownOption[] = [
   { value: "overdue", label: "미처리/기한경과", dot: "bg-red-500" },
   { value: "extended", label: "연장 신청", dot: "bg-orange-500" },
@@ -346,12 +349,14 @@ export function CaseScheduleTable({
   // 상세 들어갔다 나와도 유지되도록 캐시에서 초기화 + 변경 시 기록
   const [searchQuery, _setSearchQuery] = useState(listUiCache.searchQuery);
   const [stageSortDir, _setStageSortDir] = useState<"asc" | "desc" | "">(listUiCache.stageSortDir);
+  const [managerFilter, _setManagerFilter] = useState<string>(listUiCache.managerFilter);
   const [docTypeFilter, _setDocTypeFilter] = useState<string>(listUiCache.docTypeFilter);
   const [receivedDateSort, _setReceivedDateSort] = useState<"asc" | "desc" | "">(listUiCache.receivedDateSort);
   const [indexSort, _setIndexSort] = useState<"asc" | "desc">(listUiCache.indexSort);
 
   const setSearchQuery = (v: string) => { listUiCache.searchQuery = v; _setSearchQuery(v); };
   const setStageSortDir = (v: "asc" | "desc" | "") => { listUiCache.stageSortDir = v; _setStageSortDir(v); };
+  const setManagerFilter = (v: string) => { listUiCache.managerFilter = v; _setManagerFilter(v); };
   const setDocTypeFilter = (v: string) => { listUiCache.docTypeFilter = v; _setDocTypeFilter(v); };
   const setReceivedDateSort = (v: "asc" | "desc" | "") => { listUiCache.receivedDateSort = v; _setReceivedDateSort(v); };
   const setIndexSort = (v: React.SetStateAction<"asc" | "desc">) => {
@@ -373,6 +378,11 @@ export function CaseScheduleTable({
     [cases],
   );
 
+  const managerOptions = useMemo(
+    () => Array.from(new Set(cases.map((c) => c.manager_name).filter(Boolean) as string[])).sort((a, b) => a.localeCompare(b, "ko")),
+    [cases],
+  );
+
   const filteredCases = useMemo(() => {
     let result = cases;
     if (searchQuery.trim()) {
@@ -385,6 +395,11 @@ export function CaseScheduleTable({
       );
     }
     if (stageFilter) result = result.filter((c) => c.stage === stageFilter);
+    if (managerFilter) {
+      result = managerFilter === MANAGER_NONE
+        ? result.filter((c) => !c.manager_name)
+        : result.filter((c) => c.manager_name === managerFilter);
+    }
     if (deadlineStatusFilter) result = result.filter((c) => matchDeadlineStatus(c, deadlineStatusFilter));
 
     let indexed = result.map((c, idx) => ({ c, idx }));
@@ -432,7 +447,7 @@ export function CaseScheduleTable({
     const otherSortActive = !!(stageSortDir || receivedDateSort || deadlineStatusFilter);
     if (!otherSortActive && indexSort === "desc") indexed.reverse();
     return indexed.map((x) => x.c);
-  }, [cases, searchQuery, receivedDateSort, deadlineStatusFilter, docTypeFilter, stageFilter, stageSortDir, indexSort]);
+  }, [cases, searchQuery, receivedDateSort, deadlineStatusFilter, docTypeFilter, managerFilter, stageFilter, stageSortDir, indexSort]);
 
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const v = e.target.value;
@@ -613,7 +628,19 @@ export function CaseScheduleTable({
                   <th className={`${th} text-left`}>법원명</th>
                   <th className={`${th} text-left`}>사건번호</th>
                   <th className={`${th} text-left`}>의뢰인</th>
-                  <th className={`${th} text-left`}>담당자</th>
+                  <th className={`${th} text-left`}>
+                    <FilterDropdown
+                      value={managerFilter}
+                      onChange={setManagerFilter}
+                      options={[
+                        ...managerOptions.map((m) => ({ value: m, label: m })),
+                        ...(managerOptions.length > 0 ? [{ value: MANAGER_NONE, label: "미지정" }] : []),
+                      ]}
+                      placeholder="담당자"
+                      width={90}
+                      popupWidth={160}
+                    />
+                  </th>
                   <th className={`${th} w-28`}>
                     <FilterDropdown
                       value={stageFilter}

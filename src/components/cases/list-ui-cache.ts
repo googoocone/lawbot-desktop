@@ -7,6 +7,7 @@ export interface ListUiCache {
   stageFilter: string;
   deadlineStatusFilter: string;
   searchQuery: string;
+  managerFilter: string;
   docTypeFilter: string;
   receivedDateSort: "asc" | "desc" | "";
   stageSortDir: "asc" | "desc" | "";
@@ -20,6 +21,7 @@ export const listUiCache: ListUiCache = {
   stageFilter: "",
   deadlineStatusFilter: "",
   searchQuery: "",
+  managerFilter: "",
   docTypeFilter: "",
   receivedDateSort: "",
   stageSortDir: "",
