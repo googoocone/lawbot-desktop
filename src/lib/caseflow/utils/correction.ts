@@ -1,4 +1,5 @@
 import type { CaseCorrection } from '@/lib/caseflow/types';
+import { daysUntil } from './date';
 
 export interface CorrectionDisplay {
   label: string;
@@ -71,18 +72,10 @@ export function getCorrectionDisplay(
 function getMinDaysLeft(
   corrections: Pick<CaseCorrection, 'deadline_date'>[]
 ): number | null {
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
   let min = Infinity;
   for (const c of corrections) {
-    if (c.deadline_date) {
-      const dl = new Date(c.deadline_date);
-      dl.setHours(0, 0, 0, 0);
-      const diff = Math.ceil(
-        (dl.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)
-      );
-      if (diff < min) min = diff;
-    }
+    const diff = daysUntil(c.deadline_date);
+    if (diff !== null && diff < min) min = diff;
   }
   return min === Infinity ? null : min;
 }

@@ -6,13 +6,12 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "test:dates": "node --test scripts/test-kst-dates.cjs",
     "preview": "vite preview",
     "tauri": "tauri"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.106.0",
-    "@tanstack/react-router": "^1.170.4",
-    "@tanstack/react-table": "^8.21.3",
     "@tanstack/react-virtual": "^3.13.24",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-autostart": "^2.5.1",
@@ -26,8 +25,7 @@
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-markdown": "^10.1.0",
-    "remark-gfm": "^4.0.1",
-    "zustand": "^5.0.13"
+    "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.0",

@@ -3,27 +3,82 @@ import {
   FilePlus, ArrowLeft, Loader2, Upload, Download, FileSpreadsheet,
   CheckCircle2, XCircle, MapPin, ChevronDown, Check, Search, ChevronRight, FolderOpen,
 } from "lucide-react";
-import { createCase, bulkCreateCases, getFirmMembers } from "@/lib/actions/local";
+import { createCase, bulkCreateCases, getFirmMembers, findDuplicateCases, type DuplicateMatch } from "@/lib/actions/local";
 import { crawlSingleCase, crawlCases } from "@/lib/crawler";
 import { COURT_REGIONS, COURT_MAPPING } from "@/lib/caseflow/constants/court-mapping";
 import type { CaseType } from "@/lib/caseflow/types";
+import type { Cell, CellValue } from "exceljs";
 
 interface Props {
   onBack: () => void;
   onCreated: () => void; // 등록 후 부모 reload
 }
 
-// 지역명 또는 법원명 → 지역명 정규화
+// 지역명 또는 법원명 → 지역명 정규화.
+// 인식 못 하면 입력을 그대로 돌려주고, 미리보기에서 ⚠로 표시한다 (COURT_MAPPING에 없으면 미인식).
 function normalizeCourtRegion(input: string): string {
-  const trimmed = input.trim();
-  if (COURT_MAPPING[trimmed]) return trimmed;
-  const entry = Object.entries(COURT_MAPPING).find(([, courtName]) => courtName === trimmed);
-  if (entry) return entry[0];
-  const partial = Object.entries(COURT_MAPPING).find(
-    ([region, courtName]) => trimmed.includes(region) || courtName.includes(trimmed),
-  );
-  if (partial) return partial[0];
-  return trimmed;
+  const compact = input.replace(/\s+/g, "");
+  if (!compact) return "";
+  if (COURT_MAPPING[compact]) return compact;
+  const exact = Object.entries(COURT_MAPPING).find(([, courtName]) => courtName === compact);
+  if (exact) return exact[0];
+  // "서울회생법원", "수원지법"처럼 지역명으로 시작하는 입력만 인정한다.
+  // ("법원", "지방" 같은 일반어가 첫 항목(서울)에 걸리던 부분일치 오탐 방지)
+  const byPrefix = COURT_REGIONS.find((region) => compact.startsWith(region));
+  return byPrefix ?? compact;
+}
+
+// ExcelJS 셀 값은 서식·하이퍼링크·수식·날짜에 따라 객체라서 String()으로 바꾸면 "[object Object]"가 된다.
+function cellText(cell: Cell): string {
+  return cellValueText(cell.value).trim();
+}
+
+function cellValueText(v: CellValue): string {
+  if (v === null || v === undefined) return "";
+  if (v instanceof Date) return v.toISOString().slice(0, 10); // 엑셀 날짜 셀은 UTC 자정으로 읽힘
+  if (typeof v === "object") {
+    if ("richText" in v) return v.richText.map((t) => t.text).join("");
+    if ("hyperlink" in v) return typeof v.text === "string" ? v.text : cellValueText(v.text);
+    if ("formula" in v || "sharedFormula" in v) return cellValueText((v as { result?: CellValue }).result ?? null);
+    return ""; // 에러 셀 등
+  }
+  return String(v);
+}
+
+// 한국어 Excel의 "CSV(쉼표로 분리)"는 CP949(EUC-KR)로 저장된다. UTF-8로 못 읽으면 EUC-KR로 재시도.
+function decodeCsvText(buffer: ArrayBuffer): string {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(buffer);
+  } catch {
+    return new TextDecoder("euc-kr").decode(buffer);
+  }
+}
+
+// 따옴표로 감싼 필드(쉼표·줄바꿈 포함)를 처리하는 최소 CSV 파서. 빈 줄은 건너뛴다.
+function parseCsv(text: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let quoted = false;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (quoted) {
+      if (ch === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; }
+        else quoted = false;
+      } else field += ch;
+    } else if (ch === '"') quoted = true;
+    else if (ch === ",") { row.push(field); field = ""; }
+    else if (ch === "\n" || ch === "\r") {
+      if (ch === "\r" && text[i + 1] === "\n") i++;
+      row.push(field); field = "";
+      if (row.some((c) => c.trim())) rows.push(row);
+      row = [];
+    } else field += ch;
+  }
+  row.push(field);
+  if (row.some((c) => c.trim())) rows.push(row);
+  return rows;
 }
 
 function normalizeCaseType(input: string): string {
@@ -139,8 +194,11 @@ interface BulkRow {
   income_type?: string;
   fee?: number;
   notes?: string;
-  status: "pending" | "success" | "error";
+  status: "pending" | "success" | "error" | "skipped";
   message?: string;
+  /** 중복 감지 결과. exact는 기본 제외(skip), name은 표시만 */
+  dup?: DuplicateMatch;
+  skip?: boolean;
   assigned_to?: string;
   assign_match?: "matched" | "unmatched" | "empty";
 }
@@ -205,12 +263,14 @@ export function RegisterPage({ onBack, onCreated }: Props) {
   const fileRef = useRef<HTMLInputElement>(null);
   const [firmMembers, setFirmMembers] = useState<FirmMember[]>([]);
   const [canDistribute, setCanDistribute] = useState(false);
+  // 단건 등록: 이름만 같은 의뢰인이 있을 때 확인을 받기 위한 경고
+  const [dupWarning, setDupWarning] = useState<string | null>(null);
 
   useEffect(() => {
     getFirmMembers().then((res) => {
       setFirmMembers(res.data);
       setCanDistribute(res.canDistribute);
-    }).catch(() => {});
+    }).catch((e) => console.error("[register] 담당자 목록 조회 실패:", e));
   }, []);
 
   const matchStaff = (name: string | undefined): { id?: string; match: "matched" | "unmatched" | "empty" } => {
@@ -229,49 +289,109 @@ export function RegisterPage({ onBack, onCreated }: Props) {
     });
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!courtRegion || !applicantName) {
+  // 담당자 목록이 파일 업로드보다 늦게 도착하면, 아직 매칭 안 된 행에 매칭을 다시 적용한다
+  useEffect(() => {
+    if (!canDistribute || bulkDone) return;
+    setBulkRows((prev) =>
+      prev.some((r) => r.assign_match === undefined) ? applyStaffMatching(prev) : prev,
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [firmMembers, canDistribute]);
+
+  const resetSingleForm = () => {
+    setCourtRegion(""); setCaseNumber(""); setApplicantName("");
+    setCaseType(""); setApplicantSpouse(""); setApplicantSsn(""); setApplicantPhone("");
+    setCounselorName(""); setStaffName(""); setJudgeInfo(""); setIncomeType(""); setFee("");
+    setDocReceivedAt(""); setDistributionDate(""); setCreditorMeeting(""); setNotes("");
+    setDupWarning(null);
+  };
+
+  // 서버·파일 내 중복을 표시. 확실한 중복(사건번호/주민번호/연락처 일치)은 기본 제외, 이름만 같으면 표시만.
+  const annotateDuplicates = async (rows: BulkRow[]): Promise<BulkRow[]> => {
+    try {
+      const dups = await findDuplicateCases(rows.map((r) => ({
+        applicant_name: r.applicant_name, case_number: r.case_number, court_region: r.court_region,
+        applicant_ssn: r.applicant_ssn, applicant_phone: r.applicant_phone,
+      })));
+      return rows.map((r, i) => {
+        const dup = dups.get(i);
+        return dup ? { ...r, dup, skip: dup.kind === "exact" } : r;
+      });
+    } catch (e) {
+      console.error("[register] 중복 확인 실패:", e);
+      setError("중복 확인에 실패했습니다. 네트워크를 확인한 뒤 다시 업로드하세요.");
+      return rows;
+    }
+  };
+
+  // force: 동명이인 경고를 확인하고 그대로 등록
+  const handleSubmit = async (e: React.FormEvent | null, force = false) => {
+    e?.preventDefault();
+    if (loading) return;
+    if (!courtRegion || !applicantName.trim()) {
       setError("법원명과 이름은 필수입니다.");
       return;
     }
     setError("");
     setLoading(true);
-    const feeNum = fee.trim() ? parseFloat(fee.replace(/,/g, "")) : undefined;
-    const res = await createCase({
-      court_region: courtRegion,
-      case_number: caseNumber || undefined,
-      applicant_name: applicantName,
-      case_type: caseType || undefined,
-      applicant_spouse: applicantSpouse || undefined,
-      applicant_ssn: applicantSsn || undefined,
-      applicant_phone: applicantPhone || undefined,
-      counselor_name: counselorName || undefined,
-      staff_name: staffName || undefined,
-      judge_info: judgeInfo || undefined,
-      income_type: incomeType || undefined,
-      fee: !isNaN(feeNum as number) ? feeNum : undefined,
-      doc_received_at: docReceivedAt || undefined,
-      distribution_date: distributionDate || undefined,
-      creditor_meeting: creditorMeeting || undefined,
-      notes: notes || undefined,
-    });
-    setLoading(false);
-    if (res.error) { setError(res.error); return; }
-
-    // 사건번호 있으면 크롤링 트리거. 실패하면 등록은 유지하되 사용자에게 사유를 보여준다.
-    if (res.id && caseNumber.trim()) {
-      const r = await crawlSingleCase(res.id);
-      if (!r.ok) {
-        console.warn("[crawl] single failed:", r.stderr);
-        onCreated(); // 사건 등록 자체는 성공 → 목록 갱신
-        setError(`사건은 등록됐지만 크롤링 서버 연결에 실패했습니다.\n${r.stderr}`);
-        return;
+    const trimmedCaseNumber = caseNumber.trim();
+    try {
+      if (!force) {
+        let dup: DuplicateMatch | undefined;
+        try {
+          dup = (await findDuplicateCases([{
+            applicant_name: applicantName, case_number: trimmedCaseNumber, court_region: courtRegion,
+            applicant_ssn: applicantSsn, applicant_phone: applicantPhone,
+          }])).get(0);
+        } catch (err) {
+          setError(err instanceof Error ? err.message : "중복 확인에 실패했습니다.");
+          return;
+        }
+        if (dup?.kind === "exact") { setError(dup.reason); return; }
+        if (dup?.kind === "name") { setDupWarning(dup.reason); return; }
       }
-    }
+      setDupWarning(null);
 
-    onCreated();
-    onBack();
+      const feeNum = fee.trim() ? parseFloat(fee.replace(/,/g, "")) : undefined;
+      const res = await createCase({
+        court_region: courtRegion,
+        case_number: trimmedCaseNumber || undefined,
+        applicant_name: applicantName.trim(),
+        case_type: caseType || undefined,
+        applicant_spouse: applicantSpouse || undefined,
+        applicant_ssn: applicantSsn || undefined,
+        applicant_phone: applicantPhone || undefined,
+        counselor_name: counselorName || undefined,
+        staff_name: staffName || undefined,
+        judge_info: judgeInfo || undefined,
+        income_type: incomeType || undefined,
+        fee: !isNaN(feeNum as number) ? feeNum : undefined,
+        doc_received_at: docReceivedAt || undefined,
+        distribution_date: distributionDate || undefined,
+        creditor_meeting: creditorMeeting || undefined,
+        notes: notes || undefined,
+      });
+      if (res.error) { setError(res.error); return; }
+
+      // 등록은 성공 → 같은 내용이 다시 제출돼 중복 등록되지 않도록 폼을 비운다
+      resetSingleForm();
+      onCreated();
+
+      // 사건번호 있으면 크롤링 트리거. 실패하면 등록은 유지하되 사용자에게 사유를 보여준다.
+      // (loading은 크롤 호출이 끝날 때까지 유지해 그 사이 재제출을 막는다)
+      if (res.id && trimmedCaseNumber) {
+        const r = await crawlSingleCase(res.id);
+        if (!r.ok) {
+          console.warn("[crawl] single failed:", r.error);
+          setError(`사건은 등록됐지만 크롤링 서버 연결에 실패했습니다.\n${r.error}`);
+          return;
+        }
+      }
+
+      onBack();
+    } finally {
+      setLoading(false);
+    }
   };
 
   const downloadTemplate = async () => {
@@ -335,10 +455,10 @@ export function RegisterPage({ onBack, onCreated }: Props) {
       const workbook = new ExcelJS.Workbook();
 
       if (file.name.endsWith(".csv")) {
-        const text = await file.text();
-        const lines = text.split("\n").filter((l) => l.trim());
-        if (lines.length < 2) { setError("데이터가 없습니다."); return; }
-        const headers = lines[0].split(",").map((h) => h.trim().replace(/^"|"$/g, "").replace(/\*$/, "").replace(/\(선택\)$/, "").trim());
+        const text = decodeCsvText(await file.arrayBuffer());
+        const records = parseCsv(text);
+        if (records.length < 2) { setError("데이터가 없습니다."); return; }
+        const headers = records[0].map((h) => h.trim().replace(/\*$/, "").replace(/\(선택\)$/, "").trim());
         const colMap: Record<number, keyof BulkRow> = {};
         headers.forEach((h, i) => {
           const cleaned = h.replace(/[\r\n]+/g, "");
@@ -346,8 +466,8 @@ export function RegisterPage({ onBack, onCreated }: Props) {
           if (mapped) colMap[i] = mapped;
         });
         const rows: BulkRow[] = [];
-        for (let i = 1; i < lines.length; i++) {
-          const cols = lines[i].split(",").map((c) => c.trim().replace(/^"|"$/g, ""));
+        for (let i = 1; i < records.length; i++) {
+          const cols = records[i].map((c) => c.trim());
           const nameIdx = Object.entries(colMap).find(([, v]) => v === "applicant_name")?.[0];
           const name = nameIdx !== undefined ? cols[Number(nameIdx)] : cols[2];
           if (!name) continue;
@@ -363,7 +483,7 @@ export function RegisterPage({ onBack, onCreated }: Props) {
           });
           rows.push(row);
         }
-        setBulkRows(applyStaffMatching(rows));
+        setBulkRows(applyStaffMatching(await annotateDuplicates(rows)));
       } else {
         const buffer = await file.arrayBuffer();
         await workbook.xlsx.load(buffer);
@@ -372,7 +492,7 @@ export function RegisterPage({ onBack, onCreated }: Props) {
         const xlColMap: Record<number, keyof BulkRow> = {};
         const headerRow = sheet.getRow(1);
         headerRow.eachCell((cell, colNum) => {
-          const h = String(cell.value || "").replace(/[\r\n]+/g, "").replace(/\*$/, "").replace(/\(선택\)$/, "").trim();
+          const h = cellText(cell).replace(/[\r\n]+/g, "").replace(/\*$/, "").replace(/\(선택\)$/, "").trim();
           const mapped = CSV_HEADER_MAP[h];
           if (mapped) xlColMap[colNum] = mapped;
         });
@@ -381,7 +501,7 @@ export function RegisterPage({ onBack, onCreated }: Props) {
           if (rowNum === 1) return;
           const bulkRow: BulkRow = { court_region: "", case_number: "", applicant_name: "", status: "pending" };
           Object.entries(xlColMap).forEach(([colStr, field]) => {
-            const val = String(row.getCell(Number(colStr)).value || "").trim();
+            const val = cellText(row.getCell(Number(colStr)));
             if (!val) return;
             if (field === "court_region") bulkRow.court_region = normalizeCourtRegion(val);
             else if (field === "case_type") bulkRow.case_type = normalizeCaseType(val);
@@ -391,7 +511,7 @@ export function RegisterPage({ onBack, onCreated }: Props) {
           });
           if (bulkRow.applicant_name) rows.push(bulkRow);
         });
-        setBulkRows(applyStaffMatching(rows));
+        setBulkRows(applyStaffMatching(await annotateDuplicates(rows)));
       }
     } catch {
       setError("파일을 읽을 수 없습니다. CSV 또는 Excel 파일을 업로드하세요.");
@@ -407,36 +527,39 @@ export function RegisterPage({ onBack, onCreated }: Props) {
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0];
+    e.target.value = ""; // 같은 파일을 다시 골라도 change 이벤트가 나도록 초기화
     if (f) processFile(f);
   };
 
   const handleBulkRegister = async () => {
     setBulkLoading(true);
     setError("");
-    const inputs = bulkRows.map((row) => ({
-      court_region: row.court_region,
-      case_number: row.case_number || undefined,
-      case_type: (row.case_type as CaseType) || undefined,
-      seq_number: row.seq_number,
-      applicant_name: row.applicant_name,
-      applicant_spouse: row.applicant_spouse,
-      applicant_ssn: row.applicant_ssn,
-      applicant_phone: row.applicant_phone,
-      counselor_name: row.counselor_name,
-      staff_name: row.staff_name,
-      judge_info: row.judge_info,
-      income_type: row.income_type,
-      fee: row.fee,
-      notes: row.notes,
-      assigned_to: row.assigned_to,
-    }));
+    // 제외(skip)된 행은 건너뛴다 — 원래 인덱스를 들고 가서 결과를 되돌려 쓴다
+    const targets = bulkRows.map((row, idx) => ({ row, idx })).filter(({ row }) => !row.skip);
+    setBulkRows((prev) => prev.map((r) => (r.skip ? { ...r, status: "skipped", message: "중복으로 제외" } : r)));
     const CHUNK = 50;
     let totalSuccess = 0;
     let totalFailed = 0;
     const allCrawlIds: string[] = [];
-    for (let i = 0; i < inputs.length; i += CHUNK) {
-      const batch = inputs.slice(i, i + CHUNK);
-      const res = await bulkCreateCases(batch);
+    for (let i = 0; i < targets.length; i += CHUNK) {
+      const batch = targets.slice(i, i + CHUNK);
+      const res = await bulkCreateCases(batch.map(({ row }) => ({
+        court_region: row.court_region,
+        case_number: row.case_number || undefined,
+        case_type: (row.case_type as CaseType) || undefined,
+        seq_number: row.seq_number,
+        applicant_name: row.applicant_name,
+        applicant_spouse: row.applicant_spouse,
+        applicant_ssn: row.applicant_ssn,
+        applicant_phone: row.applicant_phone,
+        counselor_name: row.counselor_name,
+        staff_name: row.staff_name,
+        judge_info: row.judge_info,
+        income_type: row.income_type,
+        fee: row.fee,
+        notes: row.notes,
+        assigned_to: row.assigned_to,
+      })));
       if (res.error) totalFailed += batch.length - (res.count ?? 0);
       totalSuccess += res.count ?? 0;
       // 사건번호 있는 것만 크롤 대상으로 수집
@@ -444,12 +567,11 @@ export function RegisterPage({ onBack, onCreated }: Props) {
         if (c.hasNumber) allCrawlIds.push(c.id);
       }
       // 각 행 상태 업데이트
-      setBulkRows((prev) => prev.map((r, idx) => {
-        if (idx < i) return r;
-        if (idx >= i + batch.length) return r;
-        const succeeded = !res.error || (res.count ?? 0) > 0;
-        return { ...r, status: succeeded ? "success" : "error", message: res.error };
-      }));
+      const succeeded = !res.error || (res.count ?? 0) > 0;
+      const idxSet = new Set(batch.map(({ idx }) => idx));
+      setBulkRows((prev) => prev.map((r, idx) =>
+        idxSet.has(idx) ? { ...r, status: succeeded ? "success" : "error", message: res.error } : r,
+      ));
     }
     setBulkLoading(false);
     setBulkDone(true);
@@ -459,13 +581,15 @@ export function RegisterPage({ onBack, onCreated }: Props) {
     // 백그라운드 크롤 — 사건번호 있는 건만
     if (allCrawlIds.length > 0) {
       crawlCases(allCrawlIds).then((r) => {
-        if (!r.ok) console.warn("[crawl] bulk failed:", r.stderr);
+        if (!r.ok) console.warn("[crawl] bulk failed:", r.error);
       }).catch((e) => console.error("[crawl] error:", e));
     }
   };
 
   const successCount = bulkRows.filter((r) => r.status === "success").length;
   const errorCount = bulkRows.filter((r) => r.status === "error").length;
+  const skipCount = bulkRows.filter((r) => r.skip).length;
+  const registerCount = bulkRows.length - skipCount;
 
   return (
     <div className="p-6 md:p-10 max-w-4xl mx-auto w-full">
@@ -510,7 +634,7 @@ export function RegisterPage({ onBack, onCreated }: Props) {
       </div>
 
       {mode === "single" && (
-        <form onSubmit={handleSubmit} className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-5">
+        <form onSubmit={(e) => handleSubmit(e)} className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6 space-y-5">
           <CourtSelect value={courtRegion} onChange={setCourtRegion} />
 
           <div>
@@ -700,6 +824,29 @@ export function RegisterPage({ onBack, onCreated }: Props) {
 
           {error && <p className="text-sm text-red-500">{error}</p>}
 
+          {dupWarning && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2.5 text-sm text-amber-800 space-y-2">
+              <p>⚠ {dupWarning}</p>
+              <p className="text-xs text-amber-700">동명이인이면 그대로 등록하고, 같은 의뢰인이면 기존 사건을 확인해 주세요.</p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleSubmit(null, true)}
+                  className="px-3 py-1.5 rounded-lg bg-amber-600 hover:bg-amber-700 text-white text-xs font-semibold"
+                >
+                  동명이인입니다, 등록
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDupWarning(null)}
+                  className="px-3 py-1.5 rounded-lg bg-white border border-amber-300 text-amber-800 text-xs font-semibold hover:bg-amber-100"
+                >
+                  취소
+                </button>
+              </div>
+            </div>
+          )}
+
           <button
             type="submit"
             disabled={loading}
@@ -764,7 +911,7 @@ export function RegisterPage({ onBack, onCreated }: Props) {
               <input
                 ref={fileRef}
                 type="file"
-                accept=".xlsx,.xls,.csv"
+                accept=".xlsx,.csv"
                 className="hidden"
                 onChange={handleFileSelect}
               />
@@ -781,6 +928,9 @@ export function RegisterPage({ onBack, onCreated }: Props) {
               <div className="flex items-center justify-between">
                 <p className="text-sm font-semibold text-slate-700">
                   {bulkRows.length}건 확인됨
+                  {skipCount > 0 && !bulkDone && (
+                    <span className="ml-1 text-xs font-normal text-slate-400">(중복 {skipCount}건 제외 → {registerCount}건 등록)</span>
+                  )}
                   {bulkDone && (
                     <span className="ml-2 text-xs font-normal">
                       (<span className="text-emerald-600">{successCount}건 성공</span>
@@ -798,6 +948,19 @@ export function RegisterPage({ onBack, onCreated }: Props) {
                 )}
               </div>
 
+              {bulkRows.some((r) => r.dup) && !bulkDone && (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-700">
+                  ⚠ 중복 의심 건이 있습니다. 확실한 중복(⛔ 같은 사건번호·주민번호·연락처)은 등록에서 제외돼 있고,
+                  이름만 같은 건(⚠)은 체크를 해제하면 제외됩니다.
+                </div>
+              )}
+
+              {bulkRows.some((r) => !COURT_MAPPING[r.court_region]) && !bulkDone && (
+                <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-700">
+                  ⚠ 법원 지역명을 인식하지 못한 건이 있습니다. 그대로 등록하면 크롤링이 실패하니 엑셀에서 지역명(서울, 수원 등)으로 고쳐 다시 업로드하세요.
+                </div>
+              )}
+
               {canDistribute && bulkRows.some((r) => r.assign_match === "unmatched") && !bulkDone && (
                 <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-700">
                   ⚠ 담당자 이름이 일치하지 않는 건이 있습니다. 아래 드롭다운에서 직접 선택해주세요.
@@ -812,6 +975,7 @@ export function RegisterPage({ onBack, onCreated }: Props) {
                       <th className="py-2 px-3 text-left">법원명</th>
                       <th className="py-2 px-3 text-left">사건번호</th>
                       <th className="py-2 px-3 text-left">이름</th>
+                      <th className="py-2 px-3 text-left">중복</th>
                       {canDistribute && <th className="py-2 px-3 text-left">담당자</th>}
                       <th className="py-2 px-3 text-center">상태</th>
                     </tr>
@@ -820,9 +984,35 @@ export function RegisterPage({ onBack, onCreated }: Props) {
                     {bulkRows.map((row, i) => (
                       <tr key={i} className="border-t border-slate-50">
                         <td className="py-2 px-3 text-slate-400">{i + 1}</td>
-                        <td className="py-2 px-3">{row.court_region}</td>
+                        <td className="py-2 px-3">
+                          {COURT_MAPPING[row.court_region] ? row.court_region : (
+                            <span className="text-amber-600" title="법원 지역명을 인식하지 못했습니다">
+                              ⚠ {row.court_region || "미입력"}
+                            </span>
+                          )}
+                        </td>
                         <td className="py-2 px-3 font-mono text-xs">{row.case_number || "-"}</td>
                         <td className="py-2 px-3">{row.applicant_name}</td>
+                        <td className="py-2 px-3 text-xs max-w-[260px]">
+                          {row.dup ? (
+                            <label className="inline-flex items-start gap-1.5 cursor-pointer" title={row.dup.reason}>
+                              {!bulkDone && (
+                                <input
+                                  type="checkbox"
+                                  className="mt-0.5"
+                                  checked={!row.skip}
+                                  onChange={(e) => {
+                                    const skip = !e.target.checked;
+                                    setBulkRows((prev) => prev.map((r, idx) => (idx === i ? { ...r, skip } : r)));
+                                  }}
+                                />
+                              )}
+                              <span className={row.dup.kind === "exact" ? "text-red-600" : "text-amber-600"}>
+                                {row.dup.kind === "exact" ? "⛔ " : "⚠ "}{row.dup.reason}
+                              </span>
+                            </label>
+                          ) : <span className="text-slate-300">-</span>}
+                        </td>
                         {canDistribute && (
                           <td className="py-2 px-3">
                             {bulkDone ? (
@@ -867,6 +1057,7 @@ export function RegisterPage({ onBack, onCreated }: Props) {
                         )}
                         <td className="py-2 px-3 text-center">
                           {row.status === "pending" && <span className="text-slate-400">-</span>}
+                          {row.status === "skipped" && <span className="text-xs text-slate-400">제외</span>}
                           {row.status === "success" && <CheckCircle2 className="w-4 h-4 text-emerald-500 mx-auto" />}
                           {row.status === "error" && (
                             <span className="flex items-center justify-center gap-1">
@@ -884,7 +1075,7 @@ export function RegisterPage({ onBack, onCreated }: Props) {
               {!bulkDone ? (
                 <button
                   onClick={handleBulkRegister}
-                  disabled={bulkLoading}
+                  disabled={bulkLoading || registerCount === 0}
                   className={`w-full flex items-center justify-center gap-2 font-bold py-3 rounded-xl transition-all ${
                     bulkLoading
                       ? "bg-emerald-600 text-white"
@@ -892,7 +1083,7 @@ export function RegisterPage({ onBack, onCreated }: Props) {
                   } disabled:opacity-70`}
                 >
                   {bulkLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-                  {bulkLoading ? `등록 중...` : `${bulkRows.length}건 일괄 등록`}
+                  {bulkLoading ? `등록 중...` : `${registerCount}건 일괄 등록`}
                 </button>
               ) : (
                 <button

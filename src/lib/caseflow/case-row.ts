@@ -1,8 +1,8 @@
 // SQLite 로컬 데이터 → flow 웹앱의 CaseRow 모양으로 transform
 // (flow/app/dashboard/case-schedule/page.tsx의 transform 로직과 동일)
 import { dbSelect } from "@/lib/db";
-import { addDays } from "@/lib/caseflow/utils/date";
-import { getCaseScope } from "@/lib/caseflow/visibility";
+import { addDays, kstDateStr } from "@/lib/caseflow/utils/date";
+import { getCaseScope, scopeClause } from "@/lib/caseflow/visibility";
 
 export interface CaseRow {
   id: string;
@@ -32,7 +32,8 @@ export interface CaseRow {
   auto_confirmed: boolean;
   arrival_raw: string | null;
   last_crawled_at: string | null;
-  crawl_status: "pending" | "success" | "failed" | "not_found" | null;
+  // pending: 등록 직후 즉시 크롤링 대기(스피너) / stale: 즉시 크롤링이 안 끝난 채 1시간 경과(밤 자동 크롤링 대기)
+  crawl_status: "pending" | "stale" | "success" | "failed" | "not_found" | null;
   has_pending_extension: boolean;
   unseen_changes: number;
 }
@@ -87,6 +88,7 @@ interface ExtensionRecord {
 export async function loadCaseRows(): Promise<CaseRow[]> {
   // 가시성: staff는 본인 담당 사건만, 관리자는 전체
   const scope = await getCaseScope();
+  const sc = scopeClause(scope, "assigned_to");
 
   // 병렬로 cases / corrections / extensions / profiles 로드
   const [cases, corrections, extensions, profiles] = await Promise.all([
@@ -94,8 +96,8 @@ export async function loadCaseRows(): Promise<CaseRow[]> {
       `SELECT id, case_number, court_region, applicant_name, judge_info, created_at, seq_number,
               commencement_date, approval_date, status, assigned_to, staff_name, last_crawled_at, unseen_changes,
               filed_date, declared_date, dismissed_date, withdrawn_date, discharged_date, progress_count
-       FROM cases${scope ? " WHERE assigned_to = ?" : ""}`,
-      scope ? [scope] : [],
+       FROM cases WHERE is_active = 1${sc.sql}`,
+      sc.params,
     ),
     dbSelect<CorrectionRecord>(
       `SELECT id, case_id, document_type, served_date, received_date, deadline_7d, deadline_date,
@@ -146,7 +148,7 @@ export async function loadCaseRows(): Promise<CaseRow[]> {
 
     const stageDate: Record<string, string | null> = {
       pending: null,
-      filed: c.filed_date || (c.created_at ? c.created_at.split("T")[0] : null),
+      filed: c.filed_date || (c.created_at ? kstDateStr(c.created_at) : null),
       commenced: c.commencement_date,
       approved: c.approval_date,
       declared: c.declared_date,
@@ -220,7 +222,12 @@ export async function loadCaseRows(): Promise<CaseRow[]> {
       crawl_status: (() => {
         if (!c.case_number || !isValidCaseNumber) return null;
         if (c.status === "not_found") return "not_found" as const;
-        if (!c.last_crawled_at) return "pending" as const;
+        if (!c.last_crawled_at) {
+          // 등록 직후 즉시 크롤링은 몇 분 안에 끝난다. 1시간이 지나도 결과가 없으면 즉시 크롤링이
+          // 실패한 것이므로 스피너를 계속 돌리지 않고 '대기'로 표시한다 (밤 자동 크롤링에서 재시도).
+          const ageMs = Date.now() - new Date(c.created_at).getTime();
+          return ageMs < 60 * 60 * 1000 ? ("pending" as const) : ("stale" as const);
+        }
         if ((c.progress_count ?? 0) > 0) return "success" as const;
         return "failed" as const;
       })(),

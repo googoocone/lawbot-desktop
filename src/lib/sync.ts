@@ -125,9 +125,9 @@ export async function syncCases(
           status, case_progress,
           active_corrections_count, overdue_corrections_count,
           handler_checked, handler_checked_at, handler_status,
-          notes, progress_data, progress_count, unseen_changes,
+          notes, progress_data, progress_count, unseen_changes, is_active,
           last_crawled_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           r.id, r.firm_id, r.case_number, r.case_type, r.seq_number,
           r.applicant_name, r.applicant_spouse, r.applicant_ssn_enc, r.applicant_phone_enc,
@@ -139,7 +139,7 @@ export async function syncCases(
           r.status, r.case_progress,
           r.active_corrections_count, r.overdue_corrections_count,
           b(r.handler_checked), r.handler_checked_at, r.handler_status,
-          r.notes, j(r.progress_data), r.progress_count, r.unseen_changes,
+          r.notes, j(r.progress_data), r.progress_count, r.unseen_changes, r.is_active === false ? 0 : 1,
           r.last_crawled_at, r.created_at, r.updated_at,
         ],
       );
@@ -305,18 +305,20 @@ export async function clearLocalMirror(): Promise<void> {
  *
  * @returns 초기화가 일어났으면 true
  */
+// 서버 가시성 규칙(RLS)이 바뀌어 로컬 미러를 다시 받아야 할 때 올린다.
+// v2 (2026-09): staff는 본인 담당 사건만 내려받도록 RLS 변경 — 이전에 받아둔 firm 전체 데이터를 버린다.
+const MIRROR_VERSION = "2";
+
 export async function ensureLocalDataOwner(userId: string): Promise<boolean> {
-  const rows = await dbSelect<{ value: string }>(
-    "SELECT value FROM local_meta WHERE key = 'owner_user_id'",
+  const rows = await dbSelect<{ key: string; value: string }>(
+    "SELECT key, value FROM local_meta WHERE key IN ('owner_user_id', 'mirror_version')",
   );
-  const owner = rows[0]?.value ?? null;
-  if (owner === userId) return false;
+  const meta = new Map(rows.map((r) => [r.key, r.value]));
+  if (meta.get("owner_user_id") === userId && meta.get("mirror_version") === MIRROR_VERSION) return false;
 
   await clearLocalMirror();
-  await dbExecute(
-    "INSERT OR REPLACE INTO local_meta (key, value) VALUES ('owner_user_id', ?)",
-    [userId],
-  );
+  await dbExecute("INSERT OR REPLACE INTO local_meta (key, value) VALUES ('owner_user_id', ?)", [userId]);
+  await dbExecute("INSERT OR REPLACE INTO local_meta (key, value) VALUES ('mirror_version', ?)", [MIRROR_VERSION]);
   return true;
 }
 
@@ -416,12 +418,4 @@ export async function syncAll(
     deleted,
     elapsedMs: Math.round(performance.now() - t0),
   };
-}
-
-// ─────────────────────────────────────────────
-// Realtime 구독 (다음 단계)
-// ─────────────────────────────────────────────
-
-export function subscribeRealtime() {
-  // TODO: case list 화면 붙이고 나서 구현
 }

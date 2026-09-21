@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { X } from "lucide-react";
 import { updateCorrectionDeadline, submitCorrection } from "@/lib/actions/local";
-import { formatFullDate } from "@/lib/caseflow/utils/date";
+import { addDays, formatFullDate, todayStr } from "@/lib/caseflow/utils/date";
 
 export interface CorrectionPopupData {
   caseId: string;
@@ -39,7 +39,7 @@ export function CorrectionPopup({ data, onClose, onSaved }: Props) {
   const latestExtDate = extensions.length > 0
     ? [...extensions].sort((a, b) => b.extension_number - a.extension_number)[0]?.extension_date
     : null;
-  const today = new Date().toISOString().split("T")[0];
+  const today = todayStr();
   const baseDate = latestExtDate || data.receivedDate || data.servedDate || today;
   const baseDateLabel = latestExtDate ? "연장신청일" : data.receivedDate ? "수신일" : data.servedDate ? "송달일" : "오늘(수신일 미등록)";
   const isMidnightArrival = data.arrivalRaw?.includes("0시") ?? false;
@@ -47,10 +47,8 @@ export function CorrectionPopup({ data, onClose, onSaved }: Props) {
   function handleDaysChange(days: string) {
     setDaysInput(days);
     if (baseDate && days && parseInt(days) > 0) {
-      const d = new Date(baseDate);
       const offset = isMidnightArrival ? parseInt(days) - 1 : parseInt(days);
-      d.setDate(d.getDate() + offset);
-      setManualDeadline(d.toISOString().split("T")[0]);
+      setManualDeadline(addDays(baseDate, offset));
     }
   }
 
@@ -72,7 +70,7 @@ export function CorrectionPopup({ data, onClose, onSaved }: Props) {
     if (!data.correctionId) return;
     setSaving(true);
     setError("");
-    const td = new Date().toISOString().split("T")[0];
+    const td = todayStr();
     const res = await submitCorrection(data.correctionId, data.caseId, td);
     setSaving(false);
     if (res.error) {
@@ -181,7 +179,7 @@ export function CorrectionPopup({ data, onClose, onSaved }: Props) {
                   보정서를 제출하면 보정기한이 <span className="font-bold text-emerald-600">완료</span> 처리됩니다.
                 </p>
                 <p className="text-lg font-bold text-emerald-600">
-                  제출일자 : {fmtDate(new Date().toISOString().split("T")[0])}
+                  제출일자 : {fmtDate(today)}
                 </p>
               </div>
               <button

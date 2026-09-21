@@ -3,7 +3,7 @@ import { createPortal } from "react-dom";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { Trash2, Loader2 } from "lucide-react";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { formatFullDate } from "@/lib/caseflow/utils/date";
+import { daysUntil, formatFullDate } from "@/lib/caseflow/utils/date";
 import { deleteCase } from "@/lib/actions/local";
 import { listUiCache } from "./list-ui-cache";
 import type { CaseRow } from "@/lib/caseflow/case-row";
@@ -307,9 +307,7 @@ function DeadlineCell({
     overdue: "text-red-600 font-semibold",
     pending: "text-red-600 font-semibold",
   };
-  const today = new Date(); today.setHours(0, 0, 0, 0);
-  const dl = new Date(date); dl.setHours(0, 0, 0, 0);
-  const isUrgent = status !== "submitted" && dl.getTime() <= today.getTime();
+  const isUrgent = status !== "submitted" && (daysUntil(date) ?? Infinity) <= 0;
   const hasExtension = extensionCount > 0;
   const useOrange = hasExtension && status !== "submitted";
   return (
@@ -735,6 +733,11 @@ export function CaseScheduleTable({
                     </button>
                     {c.crawl_status === "pending" && (
                       <svg className="ml-1.5 w-3.5 h-3.5 text-blue-500 animate-spin inline-block" fill="none" viewBox="0 0 24 24" aria-label="크롤링 진행 중"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
+                    )}
+                    {c.crawl_status === "stale" && (
+                      <span className="ml-1.5 inline-flex items-center gap-0.5 text-[10px] font-semibold text-slate-500 bg-slate-100 ring-1 ring-slate-200 px-1.5 py-0.5 rounded" title="등록 직후 크롤링이 완료되지 않았습니다. 매일 밤 자동 크롤링에서 다시 시도합니다.">
+                        크롤링 대기
+                      </span>
                     )}
                     {c.crawl_status === "failed" && (
                       <span className="ml-1.5 inline-flex items-center gap-0.5 text-[10px] font-semibold text-red-600 bg-red-50 ring-1 ring-red-200 px-1.5 py-0.5 rounded" title="대법원 사이트에서 사건을 찾지 못했습니다 (사건번호 확인 필요)">

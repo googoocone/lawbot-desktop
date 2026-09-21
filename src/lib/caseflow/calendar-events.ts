@@ -2,7 +2,7 @@
 // - 보정 미완료 + 기한 있음
 // - 사건의 채권자집회 (creditor_meeting 텍스트에서 날짜 파싱)
 import { dbSelect } from "@/lib/db";
-import { getCaseScope } from "@/lib/caseflow/visibility";
+import { getCaseScope, scopeClause } from "@/lib/caseflow/visibility";
 
 export interface CalendarEvent {
   id: string;
@@ -45,6 +45,8 @@ function parseMeetingDate(text: string): string | null {
 export async function loadCalendarEvents(): Promise<CalendarEvent[]> {
   // 가시성: staff는 본인 담당 사건만, 관리자는 전체
   const scope = await getCaseScope();
+  const scCase = scopeClause(scope, "c.assigned_to");
+  const scMeeting = scopeClause(scope, "assigned_to");
 
   const [corrs, meetingCases] = await Promise.all([
     dbSelect<CorrectionJoined>(
@@ -53,15 +55,16 @@ export async function loadCalendarEvents(): Promise<CalendarEvent[]> {
               c.case_number, c.applicant_name, c.court_region
        FROM case_corrections cor
        JOIN cases c ON c.id = cor.case_id
-       WHERE cor.status IN ('pending', 'approaching', 'overdue')
-         AND cor.deadline_date IS NOT NULL${scope ? " AND c.assigned_to = ?" : ""}`,
-      scope ? [scope] : [],
+       WHERE c.is_active = 1
+         AND cor.status IN ('pending', 'approaching', 'overdue')
+         AND cor.deadline_date IS NOT NULL${scCase.sql}`,
+      scCase.params,
     ),
     dbSelect<CaseMeetingRecord>(
       `SELECT id, case_number, applicant_name, court_region, creditor_meeting
        FROM cases
-       WHERE creditor_meeting IS NOT NULL${scope ? " AND assigned_to = ?" : ""}`,
-      scope ? [scope] : [],
+       WHERE is_active = 1 AND creditor_meeting IS NOT NULL${scMeeting.sql}`,
+      scMeeting.params,
     ),
   ]);
 

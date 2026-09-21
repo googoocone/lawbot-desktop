@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
-import { supabase } from "@/lib/supabase";
+import { supabase, getSessionUser } from "@/lib/supabase";
 import { getDb, dbSelect } from "@/lib/db";
 import { syncAll, ensureLocalDataOwner, type SyncProgress } from "@/lib/sync";
 import { LoginScreen } from "@/components/auth/LoginScreen";
@@ -86,7 +86,7 @@ function App() {
         // 다른 계정으로 로그인했으면 이전 계정의 로컬 미러를 비운다 (타 계정 사건 노출 방지).
         // 이 단계가 실패해도 목록 로드/동기화는 반드시 진행해야 무한 로딩에 빠지지 않는다.
         try {
-          const { data: { user } } = await supabase.auth.getUser();
+          const user = await getSessionUser();
           if (user && (await ensureLocalDataOwner(user.id))) {
             console.log("[sync] 계정 변경 감지 — 로컬 데이터 초기화 후 풀 싱크");
           }
@@ -147,12 +147,26 @@ function App() {
     }
   }
 
+  // Realtime을 놓친 변경(PC 절전, 웹소켓이 조용히 끊긴 경우 등)을 따라잡는 보조 동기화:
+  // 창이 다시 보일 때 + 15분마다 증분 동기화. 바뀐 행이 없으면 count 조회 몇 번으로 끝나 비용이 거의 없다.
+  useEffect(() => {
+    if (auth.status !== "signed_in") return;
+    const onVisible = () => { if (document.visibilityState === "visible") handleSync({ quiet: true }); };
+    document.addEventListener("visibilitychange", onVisible);
+    const timer = setInterval(() => handleSync({ quiet: true }), 15 * 60 * 1000);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      clearInterval(timer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auth.status]);
+
   // 변동사항 탭 뱃지용 미읽음 건수 — 데이터 리로드 때마다 갱신
   useEffect(() => {
     if (auth.status !== "signed_in") { setUnreadChanges(0); return; }
     let alive = true;
     (async () => {
-      const { data: { user } } = await supabase.auth.getUser();
+      const user = await getSessionUser();
       if (!user || !alive) return;
       const r = await dbSelect<{ cnt: number }>(
         "SELECT COUNT(*) AS cnt FROM notifications WHERE user_id = ? AND is_read = 0",
@@ -163,7 +177,8 @@ function App() {
     return () => { alive = false; };
   }, [auth.status, reloadTick]);
 
-  async function handleSync() {
+  // quiet: 주기 동기화용 — 바뀐 게 없으면 결과 배너를 띄우지 않는다
+  async function handleSync(opts?: { quiet?: boolean }) {
     // state(syncing)는 구독 콜백의 stale closure에서 옛 값을 볼 수 있어 ref로 중복 실행을 막는다
     if (syncingRef.current) return;
     syncingRef.current = true;
@@ -174,7 +189,8 @@ function App() {
     try {
       const result = await syncAll((p) => setSyncProgress(p));
       console.log("[sync] done", result);
-      setSyncResult(`사건 ${result.cases} · 보정 ${result.corrections} · 연장 ${result.extensions} · 프로필 ${result.profiles}${result.deleted > 0 ? ` · 삭제 ${result.deleted}` : ""} (${result.elapsedMs}ms)`);
+      const changed = result.cases + result.corrections + result.extensions + result.profiles + result.notifications + result.deleted;
+      if (!opts?.quiet || changed > 0) setSyncResult(`사건 ${result.cases} · 보정 ${result.corrections} · 연장 ${result.extensions} · 프로필 ${result.profiles}${result.deleted > 0 ? ` · 삭제 ${result.deleted}` : ""} (${result.elapsedMs}ms)`);
       await reloadRows();
     } catch (e: any) {
       console.error("[sync] failed", e);

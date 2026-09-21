@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Badge } from "@/components/ui/Badge";
-import { formatFullDate } from "@/lib/caseflow/utils/date";
+import { daysUntil, formatFullDate, todayStr } from "@/lib/caseflow/utils/date";
 import { getCorrectionDisplay } from "@/lib/caseflow/utils/correction";
 import { createExtension, submitCorrection } from "@/lib/actions/local";
 import { CorrectionPopup } from "./CorrectionPopup";
@@ -67,7 +67,7 @@ function SubmitCorrectionButton({
   onDone: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [date, setDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(todayStr);
   const [busy, setBusy] = useState(false);
 
   const handleSubmit = async () => {
@@ -146,7 +146,7 @@ function ExtendDeadlineButton({
   onDone: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [extensionDate, setExtensionDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [extensionDate, setExtensionDate] = useState(todayStr);
   const [busy, setBusy] = useState(false);
 
   const handleExtend = async () => {
@@ -371,9 +371,7 @@ export function CaseCorrections({
                       }
                       let isUrgent = false;
                       if (c.deadline_date) {
-                        const today = new Date(); today.setHours(0, 0, 0, 0);
-                        const dl = new Date(c.deadline_date); dl.setHours(0, 0, 0, 0);
-                        isUrgent = dl.getTime() <= today.getTime();
+                        isUrgent = (daysUntil(c.deadline_date) ?? Infinity) <= 0;
                       }
                       return (
                         <span className={`inline-flex items-center gap-1 font-semibold ${isUrgent ? "text-red-600" : "text-gray-700"}`}>

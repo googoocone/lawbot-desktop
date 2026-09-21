@@ -1,8 +1,8 @@
 import { useState, useEffect, useMemo } from "react";
 import { dbSelect } from "@/lib/db";
-import { supabase } from "@/lib/supabase";
+import { supabase, getSessionUser } from "@/lib/supabase";
 import { markNotificationAsRead, markAllNotificationsAsRead } from "@/lib/actions/local";
-import { relativeTime } from "@/lib/caseflow/utils/date";
+import { addDays, kstDateStr, relativeTime, todayStr } from "@/lib/caseflow/utils/date";
 import { EmptyState } from "@/components/ui/EmptyState";
 import type { NotificationType, NotificationPriority } from "@/lib/caseflow/types";
 
@@ -75,33 +75,28 @@ function matchCategory(type: NotificationType, key: string): boolean {
   return type === key;
 }
 
-// 날짜별 그룹핑 — created_at(UTC)을 로컬 날짜 기준으로 묶는다
+// 날짜별 그룹핑 — created_at(UTC)을 KST 날짜 기준으로 묶는다
 const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"];
 
-function localDateKey(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-}
-
 function dateGroupLabel(key: string): string {
-  const now = new Date();
-  if (key === localDateKey(now)) return "오늘";
-  const yesterday = new Date(now);
-  yesterday.setDate(now.getDate() - 1);
-  if (key === localDateKey(yesterday)) return "어제";
+  const today = todayStr();
+  if (key === today) return "오늘";
+  if (key === addDays(today, -1)) return "어제";
   const [y, m, d] = key.split("-").map(Number);
-  const dt = new Date(y, m - 1, d);
-  return `${y === now.getFullYear() ? "" : `${y}년 `}${m}월 ${d}일 (${WEEKDAYS[dt.getDay()]})`;
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return `${y === Number(today.slice(0, 4)) ? "" : `${y}년 `}${m}월 ${d}일 (${WEEKDAYS[dt.getUTCDay()]})`;
 }
 
 export function ChangesPage({ refreshKey = 0, onCaseClick, onUnreadCountChange }: Props) {
   const [items, setItems] = useState<ChangeRow[]>([]);
   const [category, setCategory] = useState("");
   const [unreadOnly, setUnreadOnly] = useState(false);
+  const [actionError, setActionError] = useState("");
 
   useEffect(() => {
     let alive = true;
     (async () => {
-      const { data: { user } } = await supabase.auth.getUser();
+      const user = await getSessionUser();
       if (!user) return;
       const rows = await dbSelect<ChangeRow>(
         `SELECT n.id, n.case_id, n.type, n.priority, n.title, n.message,
@@ -116,7 +111,6 @@ export function ChangesPage({ refreshKey = 0, onCaseClick, onUnreadCountChange }
       );
       if (!alive) return;
       setItems(rows);
-      onUnreadCountChange?.(rows.filter((r) => !r.is_read).length);
     })();
     return () => { alive = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -141,7 +135,7 @@ export function ChangesPage({ refreshKey = 0, onCaseClick, onUnreadCountChange }
   const groups = useMemo(() => {
     const map = new Map<string, ChangeRow[]>();
     for (const n of visible) {
-      const key = localDateKey(new Date(n.created_at));
+      const key = kstDateStr(n.created_at);
       const arr = map.get(key);
       if (arr) arr.push(n);
       else map.set(key, [n]);
@@ -149,19 +143,40 @@ export function ChangesPage({ refreshKey = 0, onCaseClick, onUnreadCountChange }
     return Array.from(map.entries());
   }, [visible]);
 
+  // 헤더 뱃지는 LIMIT 300 밖의 알림도 세야 하므로 목록이 아니라 SQLite COUNT로 다시 센다
+  async function refreshUnreadBadge() {
+    if (!onUnreadCountChange) return;
+    const { data: { session } } = await supabase.auth.getSession();
+    const uid = session?.user.id;
+    if (!uid) return;
+    const r = await dbSelect<{ cnt: number }>(
+      "SELECT COUNT(*) AS cnt FROM notifications WHERE user_id = ? AND is_read = 0",
+      [uid],
+    );
+    onUnreadCountChange(r[0]?.cnt ?? 0);
+  }
+
+  // 읽음 처리는 Supabase가 먼저 성공해야 로컬·화면에 반영한다 (오프라인이면 실패를 그대로 보여준다)
   async function handleMarkOne(id: string) {
-    await markNotificationAsRead(id);
-    setItems((prev) => {
-      const next = prev.map((r) => (r.id === id ? { ...r, is_read: 1 } : r));
-      onUnreadCountChange?.(next.filter((r) => !r.is_read).length);
-      return next;
-    });
+    const res = await markNotificationAsRead(id);
+    if (res.error) {
+      setActionError(`읽음 처리에 실패했습니다: ${res.error}`);
+      return;
+    }
+    setActionError("");
+    setItems((prev) => prev.map((r) => (r.id === id ? { ...r, is_read: 1 } : r)));
+    refreshUnreadBadge();
   }
 
   async function handleMarkAll() {
-    await markAllNotificationsAsRead();
+    const res = await markAllNotificationsAsRead();
+    if (res.error) {
+      setActionError(`전체 읽음 처리에 실패했습니다: ${res.error}`);
+      return;
+    }
+    setActionError("");
     setItems((prev) => prev.map((r) => ({ ...r, is_read: 1 })));
-    onUnreadCountChange?.(0);
+    refreshUnreadBadge();
   }
 
   function handleCardClick(n: ChangeRow) {
@@ -198,6 +213,13 @@ export function ChangesPage({ refreshKey = 0, onCaseClick, onUnreadCountChange }
           )}
         </div>
       </div>
+
+      {actionError && (
+        <div className="px-4 py-2 bg-red-50 border border-red-200 rounded-lg text-xs text-red-700 flex items-center justify-between">
+          <span>{actionError}</span>
+          <button onClick={() => setActionError("")} className="text-red-500 hover:text-red-700">✕</button>
+        </div>
+      )}
 
       {/* 카테고리 필터 (로토매틱 스타일 알약) */}
       <div className="flex items-center gap-2 flex-wrap">

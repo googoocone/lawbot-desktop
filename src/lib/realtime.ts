@@ -41,9 +41,9 @@ async function upsertCase(r: any) {
       status, case_progress,
       active_corrections_count, overdue_corrections_count,
       handler_checked, handler_checked_at, handler_status,
-      notes, progress_data, progress_count, unseen_changes,
+      notes, progress_data, progress_count, unseen_changes, is_active,
       last_crawled_at, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       r.id, r.firm_id, r.case_number, r.case_type, r.seq_number,
       r.applicant_name, r.applicant_spouse, r.applicant_ssn_enc, r.applicant_phone_enc,
@@ -55,7 +55,7 @@ async function upsertCase(r: any) {
       r.status, r.case_progress,
       r.active_corrections_count, r.overdue_corrections_count,
       b(r.handler_checked), r.handler_checked_at, r.handler_status,
-      r.notes, j(r.progress_data), r.progress_count, r.unseen_changes,
+      r.notes, j(r.progress_data), r.progress_count, r.unseen_changes, r.is_active === false ? 0 : 1,
       r.last_crawled_at, r.created_at, r.updated_at,
     ],
   );

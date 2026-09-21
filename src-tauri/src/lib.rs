@@ -50,6 +50,12 @@ pub fn run() {
             sql: include_str!("../migrations/0003_local_meta.sql"),
             kind: MigrationKind::Up,
         },
+        Migration {
+            version: 4,
+            description: "add cases.is_active",
+            sql: include_str!("../migrations/0004_is_active.sql"),
+            kind: MigrationKind::Up,
+        },
     ];
 
     let mut builder = tauri::Builder::default();

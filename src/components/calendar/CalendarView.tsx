@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { formatDate } from "@/lib/caseflow/utils/date";
+import { formatDate, todayStr } from "@/lib/caseflow/utils/date";
 import type { CalendarEvent } from "@/lib/caseflow/calendar-events";
 
 interface Props {
@@ -8,28 +8,23 @@ interface Props {
 }
 
 function getDaysInMonth(year: number, month: number) {
-  return new Date(year, month + 1, 0).getDate();
+  return new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
 }
 
 function getFirstDayOfWeek(year: number, month: number) {
-  return new Date(year, month, 1).getDay();
-}
-
-function isToday(year: number, month: number, day: number) {
-  const today = new Date();
-  return today.getFullYear() === year && today.getMonth() === month && today.getDate() === day;
+  return new Date(Date.UTC(year, month, 1)).getUTCDay();
 }
 
 export function CalendarView({ events, onEventClick }: Props) {
-  const today = new Date();
-  const [year, setYear] = useState(today.getFullYear());
-  const [month, setMonth] = useState(today.getMonth());
+  const today = todayStr();
+  const [todayYear, todayMonth] = today.split("-").map(Number);
+  const [year, setYear] = useState(todayYear);
+  const [month, setMonth] = useState(todayMonth - 1);
 
   const daysInMonth = getDaysInMonth(year, month);
   const firstDay = getFirstDayOfWeek(year, month);
   const dayNames = ["일", "월", "화", "수", "목", "금", "토"];
   const monthNames = ["1월", "2월", "3월", "4월", "5월", "6월", "7월", "8월", "9월", "10월", "11월", "12월"];
-  const todayStr = new Date().toISOString().split("T")[0];
 
   const eventsByDate: Record<string, CalendarEvent[]> = {};
   events.forEach((e) => {
@@ -46,7 +41,11 @@ export function CalendarView({ events, onEventClick }: Props) {
     if (month === 11) { setYear(year + 1); setMonth(0); }
     else setMonth(month + 1);
   };
-  const goToday = () => { setYear(today.getFullYear()); setMonth(today.getMonth()); };
+  const goToday = () => {
+    const [y, m] = todayStr().split("-").map(Number);
+    setYear(y);
+    setMonth(m - 1);
+  };
 
   const prevMonthDays = getDaysInMonth(
     month === 0 ? year - 1 : year,
@@ -107,7 +106,7 @@ export function CalendarView({ events, onEventClick }: Props) {
         {cells.map((cell, i) => {
           const dateStr = `${cell.year}-${String(cell.month + 1).padStart(2, "0")}-${String(cell.day).padStart(2, "0")}`;
           const dayEvents = eventsByDate[dateStr] || [];
-          const isTodayCell = isToday(cell.year, cell.month, cell.day);
+          const isTodayCell = dateStr === today;
           const dayOfWeek = i % 7;
 
           return (
@@ -152,9 +151,9 @@ export function CalendarView({ events, onEventClick }: Props) {
                           ? "bg-gray-50 text-gray-500 hover:bg-gray-100 border-gray-100"
                           : e.status === "meeting"
                             ? "bg-purple-50 text-purple-700 hover:bg-purple-100 border-purple-100"
-                            : e.deadline_date < todayStr
+                            : e.deadline_date < today
                               ? "bg-gray-100 text-gray-400 hover:bg-gray-200 border-gray-200"
-                              : e.deadline_date === todayStr
+                              : e.deadline_date === today
                                 ? "bg-red-50 text-red-700 hover:bg-red-100 border-red-100"
                                 : "bg-orange-50 text-orange-700 hover:bg-orange-100 border-orange-100"
                       }`}

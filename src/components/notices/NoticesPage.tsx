@@ -3,6 +3,7 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Megaphone, Plus, Pencil, Trash2, ImagePlus, Loader2 } from "lucide-react";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { formatDateTime } from "@/lib/caseflow/utils/date";
 import {
   listNotices, createNotice, updateNotice, deleteNotice, uploadNoticeImage,
   NOTICE_ADMIN_EMAIL, type Notice,
@@ -20,10 +21,10 @@ const md = {
   a: ({ node, ...p }: any) => <a className="text-blue-600 hover:underline" target="_blank" rel="noreferrer" {...p} />,
   img: ({ node, ...p }: any) => <img className="max-w-full rounded-lg my-3 border border-slate-200" {...p} />,
   blockquote: ({ node, ...p }: any) => <blockquote className="border-l-4 border-slate-200 pl-4 my-3 text-slate-500 italic" {...p} />,
-  code: ({ node, inline, ...p }: any) =>
-    inline
-      ? <code className="px-1.5 py-0.5 bg-slate-100 rounded text-[13px] font-mono text-rose-600" {...p} />
-      : <code className="block p-3 bg-slate-900 text-slate-100 rounded-lg text-[13px] font-mono overflow-x-auto my-3" {...p} />,
+  // react-markdown v9+에는 inline prop이 없다. 코드 블록은 <pre>가 감싸므로 pre에 블록 스타일을 주고
+  // 그 안의 code는 인라인 스타일을 해제한다.
+  pre: ({ node, ...p }: any) => <pre className="p-3 bg-slate-900 text-slate-100 rounded-lg text-[13px] font-mono overflow-x-auto my-3 [&_code]:bg-transparent [&_code]:text-inherit [&_code]:p-0" {...p} />,
+  code: ({ node, ...p }: any) => <code className="px-1.5 py-0.5 bg-slate-100 rounded text-[13px] font-mono text-rose-600" {...p} />,
   hr: () => <hr className="my-5 border-slate-200" />,
   strong: ({ node, ...p }: any) => <strong className="font-semibold text-slate-900" {...p} />,
   table: ({ node, ...p }: any) => <div className="overflow-x-auto my-3"><table className="border-collapse text-[13px]" {...p} /></div>,
@@ -32,8 +33,7 @@ const md = {
 };
 
 function fmt(iso: string) {
-  const d = new Date(iso);
-  return `${d.getFullYear()}.${String(d.getMonth() + 1).padStart(2, "0")}.${String(d.getDate()).padStart(2, "0")} ${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+  return formatDateTime(iso);
 }
 
 type Mode = "view" | "edit" | "create";
