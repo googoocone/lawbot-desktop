@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ArrowLeft, Loader2, User, FileText, Calendar, Settings } from "lucide-react";
 import { dbSelect } from "@/lib/db";
 import { updateCase, getFirmMembers } from "@/lib/actions/local";
+import { crawlSingleCase } from "@/lib/crawler";
 import { COURT_REGIONS, COURT_MAPPING } from "@/lib/caseflow/constants/court-mapping";
 import { CASE_TYPES, CASE_STATUS_LABELS } from "@/lib/caseflow/constants/status";
 import type { CaseStatus } from "@/lib/caseflow/types";
@@ -71,6 +72,8 @@ export function CaseEditPage({ caseId, onBack, onSaved }: Props) {
   const [error, setError] = useState("");
   const [form, setForm] = useState<FormData | null>(null);
   const [staffList, setStaffList] = useState<{ id: string; name: string | null }[]>([]);
+  // 저장 시 사건번호가 바뀌었는지 비교용 (배당만 받은 사건에 나중에 번호를 넣는 경우 → 즉시 크롤링)
+  const [origCaseNumber, setOrigCaseNumber] = useState("");
 
   useEffect(() => {
     let alive = true;
@@ -90,6 +93,7 @@ export function CaseEditPage({ caseId, onBack, onSaved }: Props) {
       if (!alive) return;
       const c = rows[0];
       if (!c) { setError("사건을 찾을 수 없습니다."); setLoading(false); return; }
+      setOrigCaseNumber((c.case_number ?? "").trim());
       setForm({
         case_number: c.case_number ?? "",
         case_type: c.case_type ?? "",
@@ -137,8 +141,9 @@ export function CaseEditPage({ caseId, onBack, onSaved }: Props) {
       : null;
     const feeNum = form.fee.trim() ? parseFloat(form.fee.replace(/,/g, "")) : null;
 
+    const newCaseNumber = form.case_number.trim();
     const updates: Record<string, unknown> = {
-      case_number: form.case_number || null,
+      case_number: newCaseNumber || null,
       case_type: form.case_type || null,
       applicant_name: form.applicant_name.trim(),
       applicant_spouse: form.applicant_spouse || null,
@@ -154,7 +159,9 @@ export function CaseEditPage({ caseId, onBack, onSaved }: Props) {
       distribution_date: form.distribution_date || null,
       judge_info: form.judge_info || null,
       creditor_meeting: form.creditor_meeting || null,
-      status: form.status,
+      // 사건번호를 고쳤는데 상태가 '확인불가(not_found)'면 pending으로 되돌린다.
+      // 밤 자동 크롤링은 not_found를 종결로 보고 건너뛰므로, 되돌리지 않으면 영영 재크롤링되지 않는다.
+      status: (newCaseNumber && newCaseNumber !== origCaseNumber && form.status === "not_found") ? "pending" : form.status,
       case_progress: form.case_progress,
       notes: form.notes || null,
     };
@@ -162,6 +169,14 @@ export function CaseEditPage({ caseId, onBack, onSaved }: Props) {
     const res = await updateCase(caseId, updates);
     setSaving(false);
     if (res.error) { setError(res.error); return; }
+
+    // 사건번호가 새로 들어왔거나 바뀌었으면 등록 때처럼 즉시 크롤링을 건다.
+    // (실패해도 저장은 유지 — 밤 자동 크롤링이 다시 시도한다)
+    if (newCaseNumber && newCaseNumber !== origCaseNumber && /^\d{4}\D+\d+/.test(newCaseNumber)) {
+      crawlSingleCase(caseId).then((r) => {
+        if (!r.ok) console.warn("[crawl] 사건번호 변경 후 크롤링 요청 실패:", r.error);
+      }).catch((e) => console.error("[crawl] error:", e));
+    }
     onSaved();
   }
 

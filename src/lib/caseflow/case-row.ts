@@ -45,6 +45,7 @@ interface CaseRecord {
   applicant_name: string;
   judge_info: string | null;
   created_at: string;
+  updated_at: string;
   seq_number: number | null;
   commencement_date: string | null;
   approval_date: string | null;
@@ -93,7 +94,7 @@ export async function loadCaseRows(): Promise<CaseRow[]> {
   // 병렬로 cases / corrections / extensions / profiles 로드
   const [cases, corrections, extensions, profiles] = await Promise.all([
     dbSelect<CaseRecord>(
-      `SELECT id, case_number, court_region, applicant_name, judge_info, created_at, seq_number,
+      `SELECT id, case_number, court_region, applicant_name, judge_info, created_at, updated_at, seq_number,
               commencement_date, approval_date, status, assigned_to, staff_name, last_crawled_at, unseen_changes,
               filed_date, declared_date, dismissed_date, withdrawn_date, discharged_date, progress_count
        FROM cases WHERE is_active = 1${sc.sql}`,
@@ -223,9 +224,10 @@ export async function loadCaseRows(): Promise<CaseRow[]> {
         if (!c.case_number || !isValidCaseNumber) return null;
         if (c.status === "not_found") return "not_found" as const;
         if (!c.last_crawled_at) {
-          // 등록 직후 즉시 크롤링은 몇 분 안에 끝난다. 1시간이 지나도 결과가 없으면 즉시 크롤링이
-          // 실패한 것이므로 스피너를 계속 돌리지 않고 '대기'로 표시한다 (밤 자동 크롤링에서 재시도).
-          const ageMs = Date.now() - new Date(c.created_at).getTime();
+          // 등록(또는 사건번호 수정) 직후 즉시 크롤링은 몇 분 안에 끝난다. 마지막 수정 후 1시간이
+          // 지나도 결과가 없으면 즉시 크롤링이 실패한 것이므로 스피너 대신 '대기'로 표시한다
+          // (밤 자동 크롤링에서 재시도). 번호를 나중에 넣은 사건도 잡히도록 created_at이 아니라 updated_at 기준.
+          const ageMs = Date.now() - new Date(c.updated_at || c.created_at).getTime();
           return ageMs < 60 * 60 * 1000 ? ("pending" as const) : ("stale" as const);
         }
         if ((c.progress_count ?? 0) > 0) return "success" as const;

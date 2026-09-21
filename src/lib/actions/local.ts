@@ -194,7 +194,12 @@ function markInFileDuplicates(inputs: DuplicateCheckInput[], result: Map<number,
 
 /** Postgres unique 위반(23505)은 서버 registry 인덱스에 걸린 것 — 사용자에게 읽히는 문구로 바꾼다 */
 function friendlyInsertError(error: { code?: string; message: string }): string {
-  if (error.code === "23505") return "이미 등록된 사건입니다 (같은 법원·사건번호가 활성 상태로 존재).";
+  if (error.code === "23505") {
+    // 어느 유니크 인덱스에 걸렸는지로 문구 결정 (flow/supabase/migrations 20260717_3, 20260921_2)
+    if (error.message.includes("uq_cf_cases_active_ssn")) return "이미 등록된 의뢰인입니다 (같은 이름·주민번호가 활성 상태로 존재).";
+    if (error.message.includes("uq_cf_cases_active_phone")) return "이미 등록된 의뢰인입니다 (같은 이름·연락처가 활성 상태로 존재).";
+    return "이미 등록된 사건입니다 (같은 법원·사건번호가 활성 상태로 존재).";
+  }
   return error.message;
 }
 
@@ -703,7 +708,7 @@ export async function updateCase(
     .from("cf_cases")
     .update(updates)
     .eq("id", caseId);
-  if (error) return { error: error.message };
+  if (error) return { error: friendlyInsertError(error) };
 
   // 로컬 SQLite — 컬럼명이 동일한 컬럼만 받음
   const allowed = new Set([
