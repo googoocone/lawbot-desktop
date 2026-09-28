@@ -1,7 +1,7 @@
 import { useState, useEffect, useLayoutEffect, useRef, useCallback, useMemo } from "react";
 import { createPortal } from "react-dom";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { Trash2, Loader2 } from "lucide-react";
+import { Trash2, Loader2, X } from "lucide-react";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { daysUntil, formatFullDate } from "@/lib/caseflow/utils/date";
 import { deleteCase } from "@/lib/actions/local";
@@ -370,6 +370,9 @@ export function CaseScheduleTable({
   const [deleting, setDeleting] = useState(false);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const searchTimerRef = useRef<ReturnType<typeof setTimeout>>(undefined);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  // 입력창 글자 유무 (searchQuery는 200ms 늦게 따라오므로 지우기 버튼은 이걸로 띄운다)
+  const [hasSearchText, setHasSearchText] = useState(listUiCache.searchQuery !== "");
 
   const docTypeOptions = useMemo(
     () => Array.from(new Set(cases.map((c) => c.document_type).filter(Boolean) as string[])).sort(),
@@ -449,8 +452,19 @@ export function CaseScheduleTable({
 
   const handleSearchChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const v = e.target.value;
+    setHasSearchText(v !== "");
     if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
     searchTimerRef.current = setTimeout(() => setSearchQuery(v), 200);
+  };
+
+  const clearSearch = () => {
+    if (searchTimerRef.current) clearTimeout(searchTimerRef.current);
+    if (searchInputRef.current) {
+      searchInputRef.current.value = "";
+      searchInputRef.current.focus();
+    }
+    setHasSearchText(false);
+    setSearchQuery("");
   };
 
   const toggleSelect = (id: string) => {
@@ -554,11 +568,24 @@ export function CaseScheduleTable({
         </svg>
         <input
           type="text"
+          ref={searchInputRef}
           defaultValue={listUiCache.searchQuery}
           onChange={handleSearchChange}
+          onKeyDown={(e) => { if (e.key === "Escape" && hasSearchText) clearSearch(); }}
           placeholder="의뢰인 / 사건번호 검색"
           className="w-full pl-9 pr-8 py-2 text-[13px] border border-slate-200 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-400 transition-all placeholder:text-slate-400"
         />
+        {hasSearchText && (
+          <button
+            type="button"
+            onClick={clearSearch}
+            title="검색어 지우기"
+            aria-label="검색어 지우기"
+            className="absolute right-2 top-1/2 -translate-y-1/2 p-1 rounded-full text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        )}
       </div>
       <div
         ref={scrollRef}
