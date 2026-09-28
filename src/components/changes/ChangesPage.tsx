@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { dbSelect } from "@/lib/db";
 import { getSessionUser } from "@/lib/supabase";
-import { getCaseScope, scopeClause, countVisibleUnread } from "@/lib/caseflow/visibility";
+import { notificationClause, countVisibleUnread } from "@/lib/caseflow/visibility";
 import { markNotificationAsRead, markAllNotificationsAsRead } from "@/lib/actions/local";
 import { addDays, kstDateStr, relativeTime, todayStr } from "@/lib/caseflow/utils/date";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -99,8 +99,8 @@ export function ChangesPage({ refreshKey = 0, onCaseClick, onUnreadCountChange }
     (async () => {
       const user = await getSessionUser();
       if (!user) return;
-      // 사건 목록과 같은 가시성 — 볼 수 없는 사건의 알림은 숨긴다
-      const sc = scopeClause(await getCaseScope(), "c.");
+      // 삭제된 사건·볼 수 없는 사건의 알림은 숨긴다 (사건 목록과 같은 규칙)
+      const sc = await notificationClause();
       const rows = await dbSelect<ChangeRow>(
         `SELECT n.id, n.case_id, n.type, n.priority, n.title, n.message,
                 n.is_read, n.created_at,

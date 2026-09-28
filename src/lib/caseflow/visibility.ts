@@ -96,9 +96,19 @@ export function scopeClause(scope: CaseScope, alias = ""): { sql: string; params
   }
 }
 
-/** 이 사용자에게 보이는 사건의 미읽음 알림 수 — 알림에도 사건 가시성 규칙을 적용한다 */
-export async function countVisibleUnread(userId: string): Promise<number> {
+/**
+ * 알림 조회에 붙일 조건 (notifications n LEFT JOIN cases c 기준).
+ * 삭제(비활성)된 사건의 알림은 숨기고, 사건 목록과 같은 가시성 규칙을 적용한다.
+ * 알림 행은 이력으로 남기므로 사건을 되살리면 알림도 다시 보인다.
+ */
+export async function notificationClause(): Promise<{ sql: string; params: string[] }> {
   const sc = scopeClause(await getCaseScope(), "c.");
+  return { sql: ` AND c.is_active = 1${sc.sql}`, params: sc.params };
+}
+
+/** 이 사용자에게 보이는 사건의 미읽음 알림 수 */
+export async function countVisibleUnread(userId: string): Promise<number> {
+  const sc = await notificationClause();
   const r = await dbSelect<{ cnt: number }>(
     `SELECT COUNT(*) AS cnt
      FROM notifications n
