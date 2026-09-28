@@ -89,16 +89,26 @@ export async function findDuplicateCases(inputs: DuplicateCheckInput[]): Promise
 
   // 1) 서버 RPC (SECURITY DEFINER) — staff는 RLS로 다른 담당자 사건을 못 보므로 firm 전체 검사는 서버가 한다.
   //    주민번호·연락처는 서버가 비교만 하고 값은 돌려주지 않는다.
+  //    한 번에 수천 건을 보내면 statement timeout(8초)에 걸릴 수 있어 100건씩 나눠 보낸다.
   type RpcRow = { input_index: number; kind: string; existing_id: string; applicant_name: string; case_number: string | null; manager_name: string | null };
-  const { data: rpcRows, error: rpcErr } = await supabase.rpc("cf_find_duplicate_cases", {
-    p_inputs: inputs.map((i) => ({
-      applicant_name: i.applicant_name, case_number: i.case_number ?? null, court_region: i.court_region ?? null,
-      applicant_ssn: i.applicant_ssn ?? null, applicant_phone: i.applicant_phone ?? null,
-    })),
-  });
-  if (rpcErr && !isMissingRpc(rpcErr)) throw new Error(`중복 확인 실패: ${rpcErr.message}`);
-  if (!rpcErr) {
-    for (const r of (rpcRows ?? []) as RpcRow[]) {
+  const RPC_CHUNK = 100;
+  const rpcRowsAll: RpcRow[] = [];
+  let rpcMissing = false;
+  for (let start = 0; start < inputs.length; start += RPC_CHUNK) {
+    const { data: rpcRows, error: rpcErr } = await supabase.rpc("cf_find_duplicate_cases", {
+      p_inputs: inputs.slice(start, start + RPC_CHUNK).map((i) => ({
+        applicant_name: i.applicant_name, case_number: i.case_number ?? null, court_region: i.court_region ?? null,
+        applicant_ssn: i.applicant_ssn ?? null, applicant_phone: i.applicant_phone ?? null,
+      })),
+    });
+    if (rpcErr) {
+      if (isMissingRpc(rpcErr)) { rpcMissing = true; break; }
+      throw new Error(`중복 확인 실패: ${rpcErr.message}`);
+    }
+    for (const r of (rpcRows ?? []) as RpcRow[]) rpcRowsAll.push({ ...r, input_index: start + r.input_index });
+  }
+  if (!rpcMissing) {
+    for (const r of rpcRowsAll) {
       const who = r.manager_name ? `담당 ${r.manager_name}` : "담당자 미상";
       const existing = { id: r.existing_id, applicant_name: r.applicant_name, case_number: r.case_number, manager_name: r.manager_name };
       const match: DuplicateMatch =
@@ -193,7 +203,16 @@ function markInFileDuplicates(inputs: DuplicateCheckInput[], result: Map<number,
 }
 
 /** Postgres unique 위반(23505)은 서버 registry 인덱스에 걸린 것 — 사용자에게 읽히는 문구로 바꾼다 */
+/** 1인당 활성 사건 한도 트리거 위반 (flow/supabase/migrations/20260928_2_caseflow_personal_cases.sql) */
+function isCaseLimitError(error: { message?: string } | null): boolean {
+  return !!error?.message?.includes("cf_case_limit_exceeded");
+}
+
 function friendlyInsertError(error: { code?: string; message: string }): string {
+  if (isCaseLimitError(error)) {
+    const limit = error.message.match(/cf_case_limit_exceeded:(\d+)/)?.[1];
+    return `1인당 등록할 수 있는 활성 사건 수(${limit ?? "한도"}건)를 넘었습니다. 기존 사건을 정리하거나 관리자에게 한도 조정을 요청하세요.`;
+  }
   if (error.code === "23505") {
     // 어느 유니크 인덱스에 걸렸는지로 문구 결정 (flow/supabase/migrations 20260717_3, 20260921_2)
     if (error.message.includes("uq_cf_cases_active_ssn")) return "이미 등록된 의뢰인입니다 (같은 이름·주민번호가 활성 상태로 존재).";
@@ -306,9 +325,9 @@ export async function createCase(input: CreateCaseInput): Promise<{ id?: string;
       income_type, fee,
       doc_received_at, distribution_date, judge_info, creditor_meeting,
       status, case_progress,
-      notes, progress_count, unseen_changes,
+      notes, progress_count, unseen_changes, created_by,
       created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       data!.id, insertRow.firm_id, insertRow.case_number, insertRow.case_type, insertRow.seq_number,
       insertRow.applicant_name, insertRow.applicant_spouse, insertRow.applicant_ssn_enc, insertRow.applicant_phone_enc,
@@ -316,7 +335,7 @@ export async function createCase(input: CreateCaseInput): Promise<{ id?: string;
       insertRow.income_type, insertRow.fee,
       insertRow.doc_received_at, insertRow.distribution_date, insertRow.judge_info, insertRow.creditor_meeting,
       "pending", "active",
-      insertRow.notes, 0, 0,
+      insertRow.notes, 0, 0, profile.id,
       nowIso, data!.updated_at,
     ],
   );
@@ -328,13 +347,21 @@ export async function createCase(input: CreateCaseInput): Promise<{ id?: string;
 // 사건 일괄 등록 (엑셀)
 // ─────────────────────────────────────────────
 
+export type BulkRowResult =
+  | { ok: true; id: string; hasNumber: boolean }
+  | { ok: false; error: string };
+
+/**
+ * 여러 건 등록. 결과는 inputs와 같은 순서의 행 단위 결과.
+ * Postgres는 묶음 INSERT 중 한 건만 걸려도 묶음 전체를 거부한다. 중복(23505)으로 거부되면
+ * 그 묶음만 한 건씩 다시 넣어서, 실제로 겹치는 행만 실패로 남긴다.
+ */
 export async function bulkCreateCases(inputs: CreateCaseInput[]): Promise<{
-  count: number;
+  results: BulkRowResult[];
   error?: string;
-  createdIds: { id: string; hasNumber: boolean }[];
 }> {
   let profile: CurrentProfile;
-  try { profile = await getCurrentProfile(); } catch (e: any) { return { error: e?.message, count: 0, createdIds: [] }; }
+  try { profile = await getCurrentProfile(); } catch (e: any) { return { error: e?.message ?? "프로필 조회 실패", results: [] }; }
 
   // 번호 없는 행은 현재 최대 번호 다음부터 순서대로 부여
   let autoSeq = inputs.some((i) => i.seq_number == null)
@@ -367,24 +394,11 @@ export async function bulkCreateCases(inputs: CreateCaseInput[]): Promise<{
     notes: input.notes || null,
   }));
 
-  const BATCH = 500;
-  let count = 0;
-  let error: any = null;
-  const createdIds: { id: string; hasNumber: boolean }[] = [];
-  for (let i = 0; i < rows.length; i += BATCH) {
-    const batch = rows.slice(i, i + BATCH);
-    const { data, error: err } = await supabase
-      .from("cf_cases")
-      .insert(batch)
-      .select("id, created_at, updated_at");
-    if (err) { error = err; break; }
-    if (data) {
-      count += data.length;
-      // 로컬 SQLite 반영 (Realtime이 와도 멱등)
-      for (let idx = 0; idx < data.length; idx++) {
-        const d = data[idx];
-        const r = batch[idx];
-        createdIds.push({ id: d.id, hasNumber: !!r.case_number });
+  type Row = (typeof rows)[number];
+  type Created = { id: string; created_at: string; updated_at: string };
+
+  // 로컬 SQLite 반영 (Realtime이 와도 INSERT OR REPLACE라 멱등)
+  const mirror = async (d: Created, r: Row) => {
         await dbExecute(
           `INSERT OR REPLACE INTO cases (
             id, firm_id, case_number, case_type, seq_number,
@@ -393,9 +407,9 @@ export async function bulkCreateCases(inputs: CreateCaseInput[]): Promise<{
             income_type, fee,
             doc_received_at, distribution_date, judge_info, creditor_meeting,
             status, case_progress,
-            notes, progress_count, unseen_changes,
+            notes, progress_count, unseen_changes, created_by,
             created_at, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           [
             d.id, r.firm_id, r.case_number, r.case_type, r.seq_number,
             r.applicant_name, r.applicant_spouse, r.applicant_ssn_enc, r.applicant_phone_enc,
@@ -403,15 +417,52 @@ export async function bulkCreateCases(inputs: CreateCaseInput[]): Promise<{
             r.income_type, r.fee,
             r.doc_received_at, r.distribution_date, r.judge_info, r.creditor_meeting,
             "pending", "active",
-            r.notes, 0, 0,
+            r.notes, 0, 0, profile.id,
             d.created_at, d.updated_at,
           ],
         );
+  };
+
+  const results: BulkRowResult[] = new Array(rows.length);
+  const BATCH = 500;
+  for (let i = 0; i < rows.length; i += BATCH) {
+    const batch = rows.slice(i, i + BATCH);
+    const { data, error } = await supabase
+      .from("cf_cases")
+      .insert(batch)
+      .select("id, created_at, updated_at");
+
+    if (!error && data) {
+      for (let k = 0; k < data.length; k++) {
+        results[i + k] = { ok: true, id: data[k].id, hasNumber: !!batch[k].case_number };
+        await mirror(data[k] as Created, batch[k]);
       }
+      continue;
+    }
+
+    // 중복(23505)이나 1인당 한도 초과는 묶음 중 일부만 걸린 것일 수 있어 한 건씩 다시 넣는다
+    if (error?.code !== "23505" && !isCaseLimitError(error)) {
+      // 네트워크·권한 등 — 한 건씩 재시도해도 같은 결과라 묶음 전체를 실패 처리
+      const msg = error ? friendlyInsertError(error) : "등록 실패";
+      for (let k = 0; k < batch.length; k++) results[i + k] = { ok: false, error: msg };
+      continue;
+    }
+
+    for (let k = 0; k < batch.length; k++) {
+      const { data: one, error: e1 } = await supabase
+        .from("cf_cases")
+        .insert(batch[k])
+        .select("id, created_at, updated_at")
+        .single();
+      if (e1 || !one) {
+        results[i + k] = { ok: false, error: e1 ? friendlyInsertError(e1) : "등록 실패" };
+        continue;
+      }
+      results[i + k] = { ok: true, id: one.id, hasNumber: !!batch[k].case_number };
+      await mirror(one as Created, batch[k]);
     }
   }
-  if (error) return { error: friendlyInsertError(error), count, createdIds };
-  return { count, createdIds };
+  return { results };
 }
 
 // ─────────────────────────────────────────────
@@ -668,31 +719,33 @@ export async function createCorrection(input: CreateCorrectionInput): Promise<{ 
 // 사건 삭제
 // ─────────────────────────────────────────────
 
+// 웹앱과 같은 소프트 삭제(is_active=false). 보정·연장·알림은 이력으로 남긴다.
+//
+// ⚠ 예전엔 보정 → 사건 순서로 DELETE를 보냈다. RLS가 사건 DELETE를 막으면(firm_admin이 직원 담당 사건을
+// 지우는 경우) Supabase는 에러 없이 0건 처리하고, 앱은 성공한 줄 알고 로컬만 지웠다. 반면 보정 DELETE는
+// 통과해서, 사건은 서버에 남고 보정만 전부 사라지는 사고가 났다 (2026-09-28). 그래서
+//   1) 보정은 건드리지 않고   2) 반영된 행 수를 확인해 0건이면 실패로 알린다.
 export async function deleteCase(caseId: string): Promise<{ error?: string }> {
-  // 1) Supabase: 연장 → 보정 → 사건 순서
-  const { data: corrs } = await supabase
-    .from("cf_case_corrections")
-    .select("id")
-    .eq("case_id", caseId);
-  if (corrs && corrs.length > 0) {
-    const ids = corrs.map((c) => c.id);
-    await supabase.from("cf_correction_extensions").delete().in("correction_id", ids);
-    await supabase.from("cf_case_corrections").delete().eq("case_id", caseId);
-  }
-  const { error } = await supabase.from("cf_cases").delete().eq("id", caseId);
+  const now = new Date().toISOString();
+  const { data, error } = await supabase
+    .from("cf_cases")
+    .update({ is_active: false, deactivated_at: now })
+    .eq("id", caseId)
+    .eq("is_active", true)
+    .select("id");
   if (error) return { error: error.message };
 
-  // 2) 로컬 SQLite 동일 순서
-  const localCorrs = await dbSelect<{ id: string }>(
-    "SELECT id FROM case_corrections WHERE case_id = ?",
-    [caseId],
-  );
-  for (const c of localCorrs) {
-    await dbExecute("DELETE FROM correction_extensions WHERE correction_id = ?", [c.id]);
+  if (!data || data.length === 0) {
+    // 이미 다른 PC에서 삭제된 경우면 로컬만 맞춰주고 성공 처리, 아니면 권한 없음
+    const { data: row } = await supabase.from("cf_cases").select("is_active").eq("id", caseId).maybeSingle();
+    if (row && row.is_active === false) {
+      await dbExecute("UPDATE cases SET is_active = 0 WHERE id = ?", [caseId]);
+      return {};
+    }
+    return { error: "이 사건을 삭제할 권한이 없습니다. (담당자 본인 또는 관리자만 삭제 가능)" };
   }
-  await dbExecute("DELETE FROM case_corrections WHERE case_id = ?", [caseId]);
-  await dbExecute("DELETE FROM cases WHERE id = ?", [caseId]);
 
+  await dbExecute("UPDATE cases SET is_active = 0, updated_at = ? WHERE id = ?", [now, caseId]);
   return {};
 }
 

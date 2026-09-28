@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Loader2 } from "lucide-react";
 import { supabase, getSessionUser } from "@/lib/supabase";
-import { getDb, dbSelect } from "@/lib/db";
+import { getDb } from "@/lib/db";
+import { countVisibleUnread } from "@/lib/caseflow/visibility";
 import { syncAll, ensureLocalDataOwner, type SyncProgress } from "@/lib/sync";
 import { LoginScreen } from "@/components/auth/LoginScreen";
 import { MainShell, type ShellTab } from "@/components/layout/MainShell";
@@ -168,11 +169,8 @@ function App() {
     (async () => {
       const user = await getSessionUser();
       if (!user || !alive) return;
-      const r = await dbSelect<{ cnt: number }>(
-        "SELECT COUNT(*) AS cnt FROM notifications WHERE user_id = ? AND is_read = 0",
-        [user.id],
-      );
-      if (alive) setUnreadChanges(r[0]?.cnt ?? 0);
+      const cnt = await countVisibleUnread(user.id);
+      if (alive) setUnreadChanges(cnt);
     })();
     return () => { alive = false; };
   }, [auth.status, reloadTick]);

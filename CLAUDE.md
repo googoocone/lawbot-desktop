@@ -49,7 +49,8 @@ pnpm build              # tsc + vite build만 (타입체크 겸용 — 테스트
 ```
 
 - Supabase 테이블: `cf_cases`, `cf_case_corrections`, `cf_correction_extensions`, `cf_notifications`, `cf_crawl_logs`, `profiles`, `law_firms`. 스키마·트리거·RLS 원본은 웹앱 레포 `../flow/supabase/migrations/`.
-- 가시성(RLS, `20260921_staff_case_visibility.sql`): 관리자(super_admin/firm_admin)는 firm 전체, staff는 `assigned_to = 본인` 사건만 SELECT. 로컬 미러에도 그만큼만 내려온다. `src/lib/caseflow/visibility.ts`는 2차 안전망(fail-closed). staff가 firm 전체를 봐야 하는 채번·중복검사는 SECURITY DEFINER RPC(`cf_next_seq_number`, `cf_find_duplicate_cases`)로 처리하고, RPC 미배포 시 직접 조회로 폴백한다.
+- 가시성(RLS, `20260921_staff_case_visibility.sql` → `20260928_2_caseflow_personal_cases.sql`에서 확장): 관리자(super_admin/firm_admin)는 firm 전체, 그 외는 `assigned_to = 본인` 또는 `created_by = 본인`(등록자) 사건만 SELECT/UPDATE. `created_by`는 DB 트리거가 로그인 사용자로 강제하고, 1인당 활성 사건 한도(`law_firms.caseflow_user_case_limit`, NULL=무제한)도 같은 트리거가 막는다.
+- **사건관리 모드**(`law_firms.caseflow_mode`, `20260928_3_caseflow_team_mode.sql`): `team` = 웹·데스크탑 모두 관리자 firm 전체·직원 담당 사건 / `personal` = 웹·데스크탑 모두 본인 등록 사건만. RLS는 넓게 두고 모드별 필터는 앱이 건다 — 데스크탑 `src/lib/caseflow/visibility.ts`, 웹 `../flow/lib/caseflow/scope.ts`. **두 파일의 규칙을 항상 같이 고칠 것.** 사건 목록·달력·변동사항(알림)·미읽음 배지가 모두 같은 필터를 쓴다. 로컬 미러에도 그만큼만 내려온다. `src/lib/caseflow/visibility.ts`는 2차 안전망(fail-closed). staff가 firm 전체를 봐야 하는 채번·중복검사는 SECURITY DEFINER RPC(`cf_next_seq_number`, `cf_find_duplicate_cases`)로 처리하고, RPC 미배포 시 직접 조회로 폴백한다.
 - 로컬 SQLite 테이블은 **`cf_` 접두사가 없음** (`cases`, `case_corrections`, `correction_extensions`, `profiles`, `notifications`, `sync_state`). 스키마는 `src-tauri/migrations/*.sql`.
 - **스키마 변경 시 4곳을 함께 수정**: ① Supabase(원격), ② `src-tauri/migrations/`에 새 마이그레이션 SQL 추가 + `src-tauri/src/lib.rs`의 migrations vec에 등록 (기존 마이그레이션 수정 금지, 버전 증가), ③ `src/lib/sync.ts`의 컬럼 목록, ④ `src/lib/realtime.ts`의 upsert 컬럼 목록.
 

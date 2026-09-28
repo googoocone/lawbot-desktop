@@ -3,7 +3,11 @@ import {
   FilePlus, ArrowLeft, Loader2, Upload, Download, FileSpreadsheet,
   CheckCircle2, XCircle, MapPin, ChevronDown, Check, Search, ChevronRight, FolderOpen,
 } from "lucide-react";
-import { createCase, bulkCreateCases, getFirmMembers, findDuplicateCases, type DuplicateMatch } from "@/lib/actions/local";
+import { createCase, bulkCreateCases, getFirmMembers, findDuplicateCases, type DuplicateMatch, type BulkRowResult } from "@/lib/actions/local";
+
+// 한 번에 등록한 사건이 이보다 많으면 즉시 크롤링을 걸지 않고 밤 자동 크롤링(프록시 분산)에 맡긴다.
+// 배치 트리거는 직접연결 IP로 몰아서 돌기 때문에 수천 건을 넣으면 법원 사이트에서 차단될 수 있다.
+const MASS_CRAWL_LIMIT = 100;
 import { crawlSingleCase, crawlCases } from "@/lib/crawler";
 import { COURT_REGIONS, COURT_MAPPING } from "@/lib/caseflow/constants/court-mapping";
 import type { CaseType } from "@/lib/caseflow/types";
@@ -265,6 +269,10 @@ export function RegisterPage({ onBack, onCreated }: Props) {
   const [canDistribute, setCanDistribute] = useState(false);
   // 단건 등록: 이름만 같은 의뢰인이 있을 때 확인을 받기 위한 경고
   const [dupWarning, setDupWarning] = useState<string | null>(null);
+  // 엑셀: 중복 확인 진행/실패 — 실패하면 등록 버튼을 막는다 (확인 없이 넣으면 기존 사건과 겹쳐 실패)
+  const [dupChecking, setDupChecking] = useState(false);
+  const [dupCheckFailed, setDupCheckFailed] = useState(false);
+  const [bulkNotice, setBulkNotice] = useState("");
 
   useEffect(() => {
     getFirmMembers().then((res) => {
@@ -308,20 +316,28 @@ export function RegisterPage({ onBack, onCreated }: Props) {
 
   // 서버·파일 내 중복을 표시. 확실한 중복(사건번호/주민번호/연락처 일치)은 기본 제외, 이름만 같으면 표시만.
   const annotateDuplicates = async (rows: BulkRow[]): Promise<BulkRow[]> => {
+    setDupChecking(true);
     try {
       const dups = await findDuplicateCases(rows.map((r) => ({
         applicant_name: r.applicant_name, case_number: r.case_number, court_region: r.court_region,
         applicant_ssn: r.applicant_ssn, applicant_phone: r.applicant_phone,
       })));
+      setDupCheckFailed(false);
       return rows.map((r, i) => {
         const dup = dups.get(i);
-        return dup ? { ...r, dup, skip: dup.kind === "exact" } : r;
+        return dup ? { ...r, dup, skip: dup.kind === "exact" } : { ...r, dup: undefined, skip: false };
       });
     } catch (e) {
       console.error("[register] 중복 확인 실패:", e);
-      setError("중복 확인에 실패했습니다. 네트워크를 확인한 뒤 다시 업로드하세요.");
+      setDupCheckFailed(true);
       return rows;
+    } finally {
+      setDupChecking(false);
     }
+  };
+
+  const recheckDuplicates = async () => {
+    setBulkRows(await annotateDuplicates(bulkRows));
   };
 
   // force: 동명이인 경고를 확인하고 그대로 등록
@@ -532,8 +548,10 @@ export function RegisterPage({ onBack, onCreated }: Props) {
   };
 
   const handleBulkRegister = async () => {
+    if (bulkLoading || dupChecking || dupCheckFailed) return;
     setBulkLoading(true);
     setError("");
+    setBulkNotice("");
     // 제외(skip)된 행은 건너뛴다 — 원래 인덱스를 들고 가서 결과를 되돌려 쓴다
     const targets = bulkRows.map((row, idx) => ({ row, idx })).filter(({ row }) => !row.skip);
     setBulkRows((prev) => prev.map((r) => (r.skip ? { ...r, status: "skipped", message: "중복으로 제외" } : r)));
@@ -560,26 +578,34 @@ export function RegisterPage({ onBack, onCreated }: Props) {
         notes: row.notes,
         assigned_to: row.assigned_to,
       })));
-      if (res.error) totalFailed += batch.length - (res.count ?? 0);
-      totalSuccess += res.count ?? 0;
-      // 사건번호 있는 것만 크롤 대상으로 수집
-      for (const c of res.createdIds ?? []) {
-        if (c.hasNumber) allCrawlIds.push(c.id);
-      }
-      // 각 행 상태 업데이트
-      const succeeded = !res.error || (res.count ?? 0) > 0;
-      const idxSet = new Set(batch.map(({ idx }) => idx));
-      setBulkRows((prev) => prev.map((r, idx) =>
-        idxSet.has(idx) ? { ...r, status: succeeded ? "success" : "error", message: res.error } : r,
-      ));
+      // 행 단위 결과 반영 (중복으로 걸린 행만 실패, 나머지는 등록됨)
+      const byIdx = new Map<number, BulkRowResult>();
+      batch.forEach(({ idx }, k) => {
+        const r: BulkRowResult = res.results[k] ?? { ok: false, error: res.error ?? "등록 실패" };
+        byIdx.set(idx, r);
+        if (r.ok) {
+          totalSuccess++;
+          if (r.hasNumber) allCrawlIds.push(r.id); // 사건번호 있는 것만 크롤 대상
+        } else totalFailed++;
+      });
+      setBulkRows((prev) => prev.map((r, idx) => {
+        const x = byIdx.get(idx);
+        if (!x) return r;
+        return x.ok ? { ...r, status: "success", message: undefined } : { ...r, status: "error", message: x.error };
+      }));
     }
     setBulkLoading(false);
     setBulkDone(true);
-    if (totalFailed > 0) setError(`${totalFailed}건 실패`);
+    if (totalFailed > 0) setError(`${totalFailed}건 실패 — 표의 상태 열에서 사유를 확인하세요.`);
     if (totalSuccess > 0) onCreated();
 
-    // 백그라운드 크롤 — 사건번호 있는 건만
-    if (allCrawlIds.length > 0) {
+    if (allCrawlIds.length > MASS_CRAWL_LIMIT) {
+      setBulkNotice(
+        `${allCrawlIds.length}건은 한 번에 크롤링하기엔 많아서 오늘 밤 자동 크롤링(22시 시작, 여러 시간에 나눠 진행)에서 처리됩니다. ` +
+        "그 전까지 목록에는 '크롤링 대기'로 표시됩니다.",
+      );
+    } else if (allCrawlIds.length > 0) {
+      // 백그라운드 크롤 — 사건번호 있는 건만
       crawlCases(allCrawlIds).then((r) => {
         if (!r.ok) console.warn("[crawl] bulk failed:", r.error);
       }).catch((e) => console.error("[crawl] error:", e));
@@ -921,7 +947,16 @@ export function RegisterPage({ onBack, onCreated }: Props) {
             </div>
           )}
 
+          {dupChecking && bulkRows.length === 0 && (
+            <p className="flex items-center gap-1.5 text-sm text-slate-500">
+              <Loader2 className="w-4 h-4 animate-spin" /> 이미 등록된 사건과 겹치는지 확인하는 중...
+            </p>
+          )}
+
           {error && <p className="text-sm text-red-500">{error}</p>}
+          {bulkNotice && (
+            <p className="text-sm text-slate-600 bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">{bulkNotice}</p>
+          )}
 
           {bulkRows.length > 0 && (
             <>
@@ -940,13 +975,27 @@ export function RegisterPage({ onBack, onCreated }: Props) {
                 </p>
                 {!bulkDone && (
                   <button
-                    onClick={() => { setBulkRows([]); setError(""); }}
+                    onClick={() => { setBulkRows([]); setError(""); setDupCheckFailed(false); setBulkNotice(""); }}
                     className="text-xs text-slate-400 hover:text-slate-600"
                   >
                     다시 선택
                   </button>
                 )}
               </div>
+
+              {dupCheckFailed && !bulkDone && (
+                <div className="bg-red-50 border border-red-200 rounded-lg px-3 py-2 text-xs text-red-700 flex items-center justify-between gap-3">
+                  <span>⛔ 중복 확인에 실패해서 등록을 막아두었습니다. 확인 없이 넣으면 이미 등록된 사건과 겹쳐 실패할 수 있습니다.</span>
+                  <button
+                    type="button"
+                    onClick={recheckDuplicates}
+                    disabled={dupChecking}
+                    className="shrink-0 px-3 py-1 rounded-md bg-white border border-red-300 font-semibold hover:bg-red-100 disabled:opacity-60"
+                  >
+                    {dupChecking ? "확인 중..." : "다시 확인"}
+                  </button>
+                </div>
+              )}
 
               {bulkRows.some((r) => r.dup) && !bulkDone && (
                 <div className="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-700">
@@ -1075,7 +1124,7 @@ export function RegisterPage({ onBack, onCreated }: Props) {
               {!bulkDone ? (
                 <button
                   onClick={handleBulkRegister}
-                  disabled={bulkLoading || registerCount === 0}
+                  disabled={bulkLoading || registerCount === 0 || dupChecking || dupCheckFailed}
                   className={`w-full flex items-center justify-center gap-2 font-bold py-3 rounded-xl transition-all ${
                     bulkLoading
                       ? "bg-emerald-600 text-white"

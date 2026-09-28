@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { dbSelect } from "@/lib/db";
-import { supabase, getSessionUser } from "@/lib/supabase";
+import { getSessionUser } from "@/lib/supabase";
+import { getCaseScope, scopeClause, countVisibleUnread } from "@/lib/caseflow/visibility";
 import { markNotificationAsRead, markAllNotificationsAsRead } from "@/lib/actions/local";
 import { addDays, kstDateStr, relativeTime, todayStr } from "@/lib/caseflow/utils/date";
 import { EmptyState } from "@/components/ui/EmptyState";
@@ -98,16 +99,18 @@ export function ChangesPage({ refreshKey = 0, onCaseClick, onUnreadCountChange }
     (async () => {
       const user = await getSessionUser();
       if (!user) return;
+      // 사건 목록과 같은 가시성 — 볼 수 없는 사건의 알림은 숨긴다
+      const sc = scopeClause(await getCaseScope(), "c.");
       const rows = await dbSelect<ChangeRow>(
         `SELECT n.id, n.case_id, n.type, n.priority, n.title, n.message,
                 n.is_read, n.created_at,
                 c.case_number, c.applicant_name, c.court_name, c.staff_name
          FROM notifications n
          LEFT JOIN cases c ON c.id = n.case_id
-         WHERE n.user_id = ?
+         WHERE n.user_id = ?${sc.sql}
          ORDER BY n.created_at DESC
          LIMIT 300`,
-        [user.id],
+        [user.id, ...sc.params],
       );
       if (!alive) return;
       setItems(rows);
@@ -146,14 +149,9 @@ export function ChangesPage({ refreshKey = 0, onCaseClick, onUnreadCountChange }
   // 헤더 뱃지는 LIMIT 300 밖의 알림도 세야 하므로 목록이 아니라 SQLite COUNT로 다시 센다
   async function refreshUnreadBadge() {
     if (!onUnreadCountChange) return;
-    const { data: { session } } = await supabase.auth.getSession();
-    const uid = session?.user.id;
-    if (!uid) return;
-    const r = await dbSelect<{ cnt: number }>(
-      "SELECT COUNT(*) AS cnt FROM notifications WHERE user_id = ? AND is_read = 0",
-      [uid],
-    );
-    onUnreadCountChange(r[0]?.cnt ?? 0);
+    const user = await getSessionUser();
+    if (!user) return;
+    onUnreadCountChange(await countVisibleUnread(user.id));
   }
 
   // 읽음 처리는 Supabase가 먼저 성공해야 로컬·화면에 반영한다 (오프라인이면 실패를 그대로 보여준다)

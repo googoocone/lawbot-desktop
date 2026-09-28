@@ -125,9 +125,9 @@ export async function syncCases(
           status, case_progress,
           active_corrections_count, overdue_corrections_count,
           handler_checked, handler_checked_at, handler_status,
-          notes, progress_data, progress_count, unseen_changes, is_active,
+          notes, progress_data, progress_count, unseen_changes, is_active, created_by,
           last_crawled_at, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           r.id, r.firm_id, r.case_number, r.case_type, r.seq_number,
           r.applicant_name, r.applicant_spouse, r.applicant_ssn_enc, r.applicant_phone_enc,
@@ -139,7 +139,7 @@ export async function syncCases(
           r.status, r.case_progress,
           r.active_corrections_count, r.overdue_corrections_count,
           b(r.handler_checked), r.handler_checked_at, r.handler_status,
-          r.notes, j(r.progress_data), r.progress_count, r.unseen_changes, r.is_active === false ? 0 : 1,
+          r.notes, j(r.progress_data), r.progress_count, r.unseen_changes, r.is_active === false ? 0 : 1, r.created_by ?? null,
           r.last_crawled_at, r.created_at, r.updated_at,
         ],
       );
@@ -305,9 +305,10 @@ export async function clearLocalMirror(): Promise<void> {
  *
  * @returns 초기화가 일어났으면 true
  */
-// 서버 가시성 규칙(RLS)이 바뀌어 로컬 미러를 다시 받아야 할 때 올린다.
-// v2 (2026-09): staff는 본인 담당 사건만 내려받도록 RLS 변경 — 이전에 받아둔 firm 전체 데이터를 버린다.
-const MIRROR_VERSION = "2";
+// 서버 가시성 규칙(RLS)이나 미러 컬럼이 바뀌어 로컬 미러를 다시 받아야 할 때 올린다.
+// v2 (2026-09-21): staff는 본인 담당 사건만 내려받도록 RLS 변경 — 이전에 받아둔 firm 전체 데이터를 버린다.
+// v3 (2026-09-28): created_by(등록자) 컬럼 추가 — 개인 모드 필터에 필요. 기존 행은 값이 비어 있어 다시 받는다.
+const MIRROR_VERSION = "3";
 
 export async function ensureLocalDataOwner(userId: string): Promise<boolean> {
   const rows = await dbSelect<{ key: string; value: string }>(

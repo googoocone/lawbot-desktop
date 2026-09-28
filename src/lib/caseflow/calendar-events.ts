@@ -45,8 +45,8 @@ function parseMeetingDate(text: string): string | null {
 export async function loadCalendarEvents(): Promise<CalendarEvent[]> {
   // 가시성: staff는 본인 담당 사건만, 관리자는 전체
   const scope = await getCaseScope();
-  const scCase = scopeClause(scope, "c.assigned_to");
-  const scMeeting = scopeClause(scope, "assigned_to");
+  const scCase = scopeClause(scope, "c.");
+  const scMeeting = scopeClause(scope);
 
   const [corrs, meetingCases] = await Promise.all([
     dbSelect<CorrectionJoined>(

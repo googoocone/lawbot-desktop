@@ -482,7 +482,7 @@ export function CaseScheduleTable({
     setDeleting(false);
     setSelectedIds(new Set(failedIds)); // 실패한 건만 선택 유지
     if (failedIds.length > 0) {
-      setDeleteError(`${failedIds.length}건은 삭제하지 못했어요. 네트워크 확인 후 다시 시도해주세요.`);
+      setDeleteError(`${failedIds.length}건은 삭제하지 못했어요. 담당자 본인이나 관리자만 삭제할 수 있고, 네트워크가 끊겨도 실패할 수 있어요.`);
     } else {
       setConfirmDelete(false);
     }

@@ -89,7 +89,7 @@ interface ExtensionRecord {
 export async function loadCaseRows(): Promise<CaseRow[]> {
   // 가시성: staff는 본인 담당 사건만, 관리자는 전체
   const scope = await getCaseScope();
-  const sc = scopeClause(scope, "assigned_to");
+  const sc = scopeClause(scope);
 
   // 병렬로 cases / corrections / extensions / profiles 로드
   const [cases, corrections, extensions, profiles] = await Promise.all([
