@@ -113,6 +113,12 @@ export async function syncCases(
 
   await dbTx(async (db) => {
     for (const r of rows) {
+      // 로컬 미러는 살아 있는 사건만 보관 — 삭제(비활성)된 사건은 행과 알림을 PC에서 지운다
+      if (r.is_active === false) {
+        await db.execute("DELETE FROM notifications WHERE case_id = ?", [r.id]);
+        await db.execute("DELETE FROM cases WHERE id = ?", [r.id]);
+        continue;
+      }
       await db.execute(
         `INSERT OR REPLACE INTO cases (
           id, firm_id, case_number, case_type, seq_number,
@@ -331,6 +337,48 @@ export async function ensureLocalDataOwner(userId: string): Promise<boolean> {
 // 유령 행이 남는다. 동기화 끝에 서버 id 집합과 대조해 로컬 잉여 행을 지운다.
 // ─────────────────────────────────────────────
 
+// ─────────────────────────────────────────────
+// 삭제된 사건 PC에서 지우기
+//
+// 로컬 미러는 살아 있는 사건만 보관한다. 삭제(비활성)된 사건 행과 그 알림은 PC에서 지운다
+// (이름·주민번호·연락처·진행내역이 PC에 남지 않도록).
+// 보정·연장 행은 남긴다 — 웹에서 같은 사건을 다시 등록해 되살리면 서버의 보정 행은 바뀌지 않아
+// 증분 동기화로 다시 내려오지 않기 때문이다. 보정 행에는 개인정보가 없다.
+// ─────────────────────────────────────────────
+
+/** 사건 한 건을 PC에서 지운다 (사건 행 + 그 사건의 알림) */
+export async function purgeCaseLocal(caseId: string): Promise<void> {
+  await dbExecute("DELETE FROM notifications WHERE case_id = ?", [caseId]);
+  await dbExecute("DELETE FROM cases WHERE id = ?", [caseId]);
+}
+
+/**
+ * 비활성 사건 행과, 살아 있는 사건에 속하지 않는 알림을 한꺼번에 지운다.
+ * 지운 게 있으면 VACUUM으로 DB 파일에서도 흔적을 없앤다 (실패해도 동작엔 지장 없음).
+ * @returns 지운 행 수
+ */
+export async function purgeInactiveLocal(): Promise<number> {
+  const orphanNotif = "case_id IS NOT NULL AND case_id NOT IN (SELECT id FROM cases WHERE is_active = 1)";
+  const counts = await dbSelect<{ c: number; n: number }>(
+    `SELECT (SELECT COUNT(*) FROM cases WHERE is_active = 0) AS c,
+            (SELECT COUNT(*) FROM notifications WHERE ${orphanNotif}) AS n`,
+  );
+  const total = (counts[0]?.c ?? 0) + (counts[0]?.n ?? 0);
+  if (total === 0) return 0;
+
+  await dbTx(async (db) => {
+    await db.execute(`DELETE FROM notifications WHERE ${orphanNotif}`);
+    await db.execute("DELETE FROM cases WHERE is_active = 0");
+  });
+  try {
+    await dbExecute("VACUUM");
+  } catch (e) {
+    console.warn("[sync] VACUUM 건너뜀:", e);
+  }
+  console.log(`[sync] 삭제된 사건 PC 정리: 사건 ${counts[0]?.c ?? 0} · 알림 ${counts[0]?.n ?? 0}`);
+  return total;
+}
+
 const RECONCILE_TABLES: { sb: string; local: string }[] = [
   { sb: "cf_cases", local: "cases" },
   { sb: "cf_case_corrections", local: "case_corrections" },
@@ -379,6 +427,8 @@ export interface SyncResult {
   profiles: number;
   notifications: number;
   deleted: number;
+  /** 삭제된 사건 PC 정리로 지운 행 수 (사건 + 알림) */
+  purged: number;
   elapsedMs: number;
 }
 
@@ -409,6 +459,8 @@ export async function syncAll(
   // 서버에서 삭제된 사건/보정/연장을 로컬에서도 제거 (앱이 꺼져 있어 놓친 삭제 따라잡기)
   onProgress?.({ stage: "정리", percent: 98 });
   const deleted = await reconcileDeletes();
+  // 삭제된 사건의 행·알림을 PC에서 지운다 (알림은 사건보다 나중에 받으므로 맨 끝에)
+  const purged = await purgeInactiveLocal();
   onProgress?.({ stage: "완료", percent: 100 });
   return {
     cases,
@@ -417,6 +469,7 @@ export async function syncAll(
     profiles,
     notifications,
     deleted,
+    purged,
     elapsedMs: Math.round(performance.now() - t0),
   };
 }

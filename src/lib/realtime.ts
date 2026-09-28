@@ -7,6 +7,7 @@
 
 import { supabase } from "./supabase";
 import { dbExecute } from "./db";
+import { purgeCaseLocal } from "./sync";
 
 type RowChange<T = Record<string, unknown>> = {
   eventType: "INSERT" | "UPDATE" | "DELETE";
@@ -29,6 +30,11 @@ function j(v: unknown): string | null {
 // ─────────────────────────────────────────────
 
 async function upsertCase(r: any) {
+  // 로컬 미러는 살아 있는 사건만 — 삭제(비활성)되면 사건 행과 그 알림을 PC에서 지운다
+  if (r.is_active === false) {
+    await purgeCaseLocal(r.id);
+    return;
+  }
   await dbExecute(
     `INSERT OR REPLACE INTO cases (
       id, firm_id, case_number, case_type, seq_number,
@@ -156,7 +162,10 @@ export function subscribeRealtime(opts: {
     try {
       if (payload.eventType === "DELETE") {
         const id = (payload.old as any)?.id;
-        if (id) await deleteLocal(table, id);
+        if (id) {
+          if (table === "cases") await purgeCaseLocal(id);
+          else await deleteLocal(table, id);
+        }
       } else {
         const row = payload.new;
         if (!row) return;

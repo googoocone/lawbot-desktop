@@ -2,6 +2,7 @@
 // 실패하면 SQLite는 안 건드림 (다음 sync 때 일관성 회복).
 import { supabase, getSessionUser } from "@/lib/supabase";
 import { dbExecute, dbSelect } from "@/lib/db";
+import { purgeCaseLocal } from "@/lib/sync";
 import { daysUntil, addDays, todayStr } from "@/lib/caseflow/utils/date";
 import { COURT_MAPPING } from "@/lib/caseflow/constants/court-mapping";
 import type { CaseType } from "@/lib/caseflow/types";
@@ -739,13 +740,14 @@ export async function deleteCase(caseId: string): Promise<{ error?: string }> {
     // 이미 다른 PC에서 삭제된 경우면 로컬만 맞춰주고 성공 처리, 아니면 권한 없음
     const { data: row } = await supabase.from("cf_cases").select("is_active").eq("id", caseId).maybeSingle();
     if (row && row.is_active === false) {
-      await dbExecute("UPDATE cases SET is_active = 0 WHERE id = ?", [caseId]);
+      await purgeCaseLocal(caseId);
       return {};
     }
     return { error: "이 사건을 삭제할 권한이 없습니다. (담당자 본인 또는 관리자만 삭제 가능)" };
   }
 
-  await dbExecute("UPDATE cases SET is_active = 0, updated_at = ? WHERE id = ?", [now, caseId]);
+  // 서버는 비활성화(이력 보존), PC에서는 사건 행과 알림을 지운다
+  await purgeCaseLocal(caseId);
   return {};
 }
 
