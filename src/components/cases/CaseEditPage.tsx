@@ -14,6 +14,7 @@ interface Props {
 }
 
 interface CaseRecord {
+  seq_number: number | null;
   case_number: string | null;
   case_type: string | null;
   applicant_name: string;
@@ -35,6 +36,7 @@ interface CaseRecord {
 }
 
 interface FormData {
+  seq_number: string;
   case_number: string;
   case_type: string;
   applicant_name: string;
@@ -80,7 +82,7 @@ export function CaseEditPage({ caseId, onBack, onSaved }: Props) {
     (async () => {
       const [rows, members] = await Promise.all([
         dbSelect<CaseRecord>(
-          `SELECT case_number, case_type, applicant_name, applicant_spouse,
+          `SELECT seq_number, case_number, case_type, applicant_name, applicant_spouse,
                   applicant_ssn_enc, applicant_phone_enc, court_region,
                   counselor_name, assigned_to, income_type, fee,
                   doc_received_at, distribution_date, judge_info, creditor_meeting,
@@ -95,6 +97,7 @@ export function CaseEditPage({ caseId, onBack, onSaved }: Props) {
       if (!c) { setError("사건을 찾을 수 없습니다."); setLoading(false); return; }
       setOrigCaseNumber((c.case_number ?? "").trim());
       setForm({
+        seq_number: c.seq_number !== null ? String(c.seq_number) : "",
         case_number: c.case_number ?? "",
         case_type: c.case_type ?? "",
         applicant_name: c.applicant_name,
@@ -133,6 +136,13 @@ export function CaseEditPage({ caseId, onBack, onSaved }: Props) {
       setError("신청인명은 필수입니다.");
       return;
     }
+    // 목록 번호: 비우면 번호 없음(null), 다른 사건과 겹쳐도 된다
+    const seqText = form.seq_number.trim();
+    if (seqText && !/^\d+$/.test(seqText)) {
+      setError("번호는 숫자만 입력해 주세요.");
+      return;
+    }
+    const seqNum = seqText ? parseInt(seqText, 10) : null;
     setError("");
     setSaving(true);
 
@@ -143,6 +153,7 @@ export function CaseEditPage({ caseId, onBack, onSaved }: Props) {
 
     const newCaseNumber = form.case_number.trim();
     const updates: Record<string, unknown> = {
+      seq_number: seqNum,
       case_number: newCaseNumber || null,
       case_type: form.case_type || null,
       applicant_name: form.applicant_name.trim(),
@@ -271,6 +282,11 @@ export function CaseEditPage({ caseId, onBack, onSaved }: Props) {
             신청인 정보
           </h2>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-3">
+            <div>
+              <label className={labelCls}>번호 <span className="font-normal text-gray-400">(목록 번호 · 다른 사건과 겹쳐도 됨)</span></label>
+              <input name="seq_number" value={form.seq_number} onChange={handleChange} inputMode="numeric" className={inputCls} placeholder="예: 2086" />
+            </div>
+            <div className="hidden md:block" />
             <div>
               <label className={labelCls}>신청인명 <span className="text-red-400">*</span></label>
               <input name="applicant_name" value={form.applicant_name} onChange={handleChange} required className={inputCls} placeholder="홍길동" />

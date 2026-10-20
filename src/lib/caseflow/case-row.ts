@@ -97,7 +97,8 @@ export async function loadCaseRows(): Promise<CaseRow[]> {
       `SELECT id, case_number, court_region, applicant_name, judge_info, created_at, updated_at, seq_number,
               commencement_date, approval_date, status, assigned_to, staff_name, last_crawled_at, unseen_changes,
               filed_date, declared_date, dismissed_date, withdrawn_date, discharged_date, progress_count
-       FROM cases WHERE is_active = 1${sc.sql}`,
+       FROM cases WHERE is_active = 1${sc.sql}
+       ORDER BY created_at`,
       sc.params,
     ),
     dbSelect<CorrectionRecord>(
@@ -238,11 +239,12 @@ export async function loadCaseRows(): Promise<CaseRow[]> {
     };
   });
 
-  // 기본 정렬: 의뢰인 번호 오름차순, null은 뒤로
+  // 기본 정렬: 의뢰인 번호 오름차순, null은 뒤로.
+  // 번호가 겹치면 0을 돌려 SQL 순서(등록순)를 유지한다 (Array.sort는 안정 정렬)
   rows.sort((a, b) => {
     const sa = a.seq_number ?? Number.POSITIVE_INFINITY;
     const sb = b.seq_number ?? Number.POSITIVE_INFINITY;
-    return sa - sb;
+    return sa === sb ? 0 : sa - sb;
   });
 
   return rows;
