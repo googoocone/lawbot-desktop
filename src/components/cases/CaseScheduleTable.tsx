@@ -31,6 +31,8 @@ function fmtDate(d: string | null) {
 function StageBadge({ stage, date }: { stage: string; date?: string | null }) {
   const config: Record<string, { label: string; cls: string; dot: string }> = {
     pending: { label: "접수전", cls: "bg-yellow-50 text-yellow-700 ring-1 ring-yellow-200", dot: "bg-yellow-500" },
+    hold: { label: "보류", cls: "bg-slate-100 text-slate-600 ring-1 ring-slate-200", dot: "bg-slate-400" },
+    returned: { label: "취소반환", cls: "bg-red-50 text-red-600 ring-1 ring-red-200", dot: "bg-red-400" },
     filed: { label: "사건접수", cls: "bg-gray-100 text-gray-600", dot: "bg-gray-400" },
     unconfirmed: { label: "미확인", cls: "bg-gray-50 text-gray-400 ring-1 ring-gray-200", dot: "bg-gray-300" },
     not_found: { label: "사건 없음", cls: "bg-rose-50 text-rose-500 ring-1 ring-rose-200", dot: "bg-rose-400" },
@@ -68,6 +70,8 @@ interface DropdownOption {
 
 export const STAGE_OPTIONS: { value: string; label: string; dot: string }[] = [
   { value: "pending", label: "접수전", dot: "bg-yellow-500" },
+  { value: "hold", label: "보류", dot: "bg-slate-400" },
+  { value: "returned", label: "취소반환", dot: "bg-red-400" },
   { value: "filed", label: "사건접수", dot: "bg-gray-400" },
   { value: "commenced", label: "개시결정", dot: "bg-blue-500" },
   { value: "approved", label: "인가결정", dot: "bg-purple-500" },
@@ -782,6 +786,12 @@ export function CaseScheduleTable({
                     {c.stage === "filed" && c.crawl_status !== "success"
                       ? <StageBadge stage="unconfirmed" />
                       : <StageBadge stage={c.stage} date={c.stage_date} />}
+                    {/* 접수된 사건을 보류/취소반환으로 돌린 경우: 법원 단계 옆에 진행상태 태그 */}
+                    {c.stage !== "hold" && c.stage !== "returned" && (c.case_progress === "hold" || c.case_progress === "cancelled") && (
+                      <span className={`ml-1 inline-flex px-1.5 py-0.5 rounded text-[10px] font-semibold ${c.case_progress === "hold" ? "bg-slate-100 text-slate-500" : "bg-red-50 text-red-500"}`}>
+                        {c.case_progress === "hold" ? "보류" : "취소반환"}
+                      </span>
+                    )}
                   </td>
                   <td className={td}>{c.document_type || "-"}</td>
                   <td className={td}>

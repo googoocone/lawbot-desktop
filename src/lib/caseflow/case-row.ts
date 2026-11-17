@@ -15,6 +15,8 @@ export interface CaseRow {
   manager_name: string | null;
   stage: string;
   stage_date: string | null;
+  // 사무실 진행상태 (active/hold/cancelled) — 법원 단계와 별개로 사람이 정한다
+  case_progress: string | null;
   document_type: string | null;
   received_date: string | null;
   deadline_date: string | null;
@@ -60,6 +62,7 @@ interface CaseRecord {
   withdrawn_date: string | null;
   discharged_date: string | null;
   progress_count: number;
+  case_progress: string | null;
 }
 
 interface CorrectionRecord {
@@ -96,7 +99,8 @@ export async function loadCaseRows(): Promise<CaseRow[]> {
     dbSelect<CaseRecord>(
       `SELECT id, case_number, court_region, applicant_name, judge_info, created_at, updated_at, seq_number,
               commencement_date, approval_date, status, assigned_to, staff_name, last_crawled_at, unseen_changes,
-              filed_date, declared_date, dismissed_date, withdrawn_date, discharged_date, progress_count
+              filed_date, declared_date, dismissed_date, withdrawn_date, discharged_date, progress_count,
+              case_progress
        FROM cases WHERE is_active = 1${sc.sql}
        ORDER BY created_at`,
       sc.params,
@@ -147,6 +151,10 @@ export async function loadCaseRows(): Promise<CaseRow[]> {
     else if (c.approval_date || c.status === "approved") stage = "approved";
     else if (c.status === "declared") stage = "declared";
     else if (c.commencement_date || c.status === "commenced") stage = "commenced";
+    // 접수 전에 멈춘 사건(잠수·신청 전 취하)은 사람이 정한 진행상태를 단계로 보여준다.
+    // 접수된 사건은 법원 단계를 그대로 두고, 목록에서 진행상태 태그를 따로 붙인다.
+    if (stage === "pending" && c.case_progress === "hold") stage = "hold";
+    else if (stage === "pending" && c.case_progress === "cancelled") stage = "returned";
 
     const stageDate: Record<string, string | null> = {
       pending: null,
@@ -202,6 +210,7 @@ export async function loadCaseRows(): Promise<CaseRow[]> {
       manager_name: (c.assigned_to ? nameById.get(c.assigned_to) : null) || c.staff_name || null,
       stage,
       stage_date: stageDate[stage] || null,
+      case_progress: c.case_progress,
       document_type: latestCorrection?.document_type || null,
       received_date: latestCorrection?.received_date || null,
       deadline_date: deadlineDate,
